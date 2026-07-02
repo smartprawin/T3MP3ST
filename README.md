@@ -45,7 +45,7 @@ Every number below re-derives from a committed artifact — so you can check the
 > **On XBEN — XBOW's own 104-challenge suite, hint-free and source-withheld at runtime —
 > t3mp3st lands a re-derivable `pass@1` MEAN of `90.1%`.** The Wilson-95 floor of that
 > interval is `86.2%` — which *still clears* XBOW's own self-reported **85%** on the same
-> suite, AND scored 100% on white-box runs! The difference that matters: **ours reproduces from committed artifacts; theirs is
+> suite, AND scored `100%` on white-box runs! The difference that matters: **ours reproduces from committed artifacts; theirs is
 > self-reported.** Don't trust the number — run it yourself:
 
 ### Is this the apex *open-source* offensive harness?
