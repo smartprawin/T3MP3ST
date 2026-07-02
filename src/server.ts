@@ -7350,8 +7350,35 @@ app.get('/api/bounty/credentials', (_req: Request, res: Response) => {
 // Detect agent CLIs that are already installed + logged-in on this machine and enlist them as
 // operators — no keys are entered or read (auth is detected by artifact PRESENCE only; see
 // src/agent/local-agents.ts). In-memory registry of agents connected this session:
-const connectedLocalAgents = new Map<string, { id: string; label: string; version?: string; connectedAt: number; lastPing?: AgentRunSummary | null }>();
 type AgentRunSummary = { ok: boolean; latencyMs: number; output: string; error?: string };
+type ConnectedLocalAgent = {
+  id: string;
+  label: string;
+  version?: string;
+  connectedAt: number;
+  lastPing?: AgentRunSummary | null;
+  lastHealthCheckAt?: number;
+};
+const connectedLocalAgents = new Map<string, ConnectedLocalAgent>();
+const LOCAL_AGENT_HEALTH_TTL_MS = 30_000;
+const LOCAL_AGENT_HEALTH_TIMEOUT_MS = 15_000;
+
+async function refreshConnectedLocalAgentHealth(force = false): Promise<void> {
+  const now = Date.now();
+  const due = Array.from(connectedLocalAgents.values()).filter((agent) => (
+    force ||
+    !agent.lastHealthCheckAt ||
+    now - agent.lastHealthCheckAt > LOCAL_AGENT_HEALTH_TTL_MS
+  ));
+
+  await Promise.all(due.map(async (agent) => {
+    const result = await pingLocalAgent(agent.id, undefined, LOCAL_AGENT_HEALTH_TIMEOUT_MS);
+    const current = connectedLocalAgents.get(agent.id);
+    if (!current) return;
+    current.lastPing = result;
+    current.lastHealthCheckAt = Date.now();
+  }));
+}
 
 // GET /api/agents/local/detect — which agents are installed / authed / ready (no tokens spent)
 app.get('/api/agents/local/detect', async (_req: Request, res: Response): Promise<void> => {
@@ -7378,7 +7405,14 @@ app.post('/api/agents/local/connect', async (req: Request, res: Response): Promi
     if (!d.authed) { results.push({ id, status: 'not-authed', version: d.version }); continue; }
     let ping: AgentRunSummary | null = null;
     if (doPing) ping = await pingLocalAgent(id);
-    connectedLocalAgents.set(id, { id, label: d.label, version: d.version, connectedAt: Date.now(), lastPing: ping });
+    connectedLocalAgents.set(id, {
+      id,
+      label: d.label,
+      version: d.version,
+      connectedAt: Date.now(),
+      lastPing: ping,
+      lastHealthCheckAt: ping ? Date.now() : undefined,
+    });
     results.push({ id, status: 'active', label: d.label, version: d.version, authMethod: d.authMethod, ping });
   }
   syncLocalAgentSelection(connectedLocalAgents, ids, replace);
@@ -7391,7 +7425,10 @@ app.post('/api/agents/local/ping', async (req: Request, res: Response): Promise<
   if (!body.id) { res.status(400).json({ error: 'id required' }); return; }
   const r = await pingLocalAgent(body.id, body.prompt);
   const entry = connectedLocalAgents.get(body.id);
-  if (entry) entry.lastPing = r;
+  if (entry) {
+    entry.lastPing = r;
+    entry.lastHealthCheckAt = Date.now();
+  }
   res.json({ id: body.id, ...r });
 });
 
@@ -7411,8 +7448,10 @@ app.post('/api/agents/local/disconnect', (req: Request, res: Response): void => 
   res.json({ ok: true, connected: Array.from(connectedLocalAgents.keys()) });
 });
 
-// GET /api/agents/local/status — currently connected agents
-app.get('/api/agents/local/status', (_req: Request, res: Response): void => {
+// GET /api/agents/local/status — connected agents, optionally with a bounded live health check.
+app.get('/api/agents/local/status', async (req: Request, res: Response): Promise<void> => {
+  const check = /^(1|true|yes|on)$/i.test(String(req.query.check || ''));
+  if (check) await refreshConnectedLocalAgentHealth(false);
   res.json({ connected: Array.from(connectedLocalAgents.values()) });
 });
 
