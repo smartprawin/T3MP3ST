@@ -6920,7 +6920,7 @@ Correlating findings across agents, identifying patterns, producing actionable i
             { id: 'openai/gpt-4o', name: 'GPT-4o', provider: 'OpenAI' },
             { id: 'openai/o1', name: 'o1', provider: 'OpenAI' },
             // Google (Dec 2025)
-            { id: 'google/gemini-3-pro-preview', name: 'Gemini 3 Pro', provider: 'Google' },
+            { id: 'google/gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', provider: 'Google' },
             { id: 'google/gemini-3-flash-preview', name: 'Gemini 3 Flash', provider: 'Google' },
             { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google' },
             // xAI (Dec 2025)
@@ -18739,7 +18739,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                 const serverLLM = !!(health && health.llm && health.llm.connected);
                 const hasBackend = !!(agent || key || serverLLM);
                 if (!key && agent) { txt = '⚡ ' + agent.toUpperCase() + ' · local, no key'; color = '#00ff88'; }
-                else if (key) { txt = (key.startsWith('sk-ant-') ? 'Anthropic' : key.startsWith('sk-') ? 'OpenAI' : 'OpenRouter') + ' · your key'; color = '#0088ff'; }
+                else if (key) { txt = (key.startsWith('sk-ant-') ? 'Anthropic' : key.startsWith('sk-or-') ? 'OpenRouter' : key.startsWith('sk-') ? 'OpenAI' : 'OpenRouter') + ' · your key'; color = '#0088ff'; }
                 else if (serverLLM) { txt = (health.llm.provider || 'server') + ' · server key'; color = '#0088ff'; }
                 else { txt = 'none — connect agent / add key'; color = '#ff6b6b'; }
                 $('sysLLM').innerHTML = '<span style="color:'+color+'">'+txt+'</span>';
@@ -18987,7 +18987,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                 } else if (apiKey && apiKey.startsWith('sk-ant-')) {
                     provider = 'anthropic';
                     model = model.replace('anthropic/', ''); // Anthropic API doesn't use prefix
-                } else if (apiKey && apiKey.startsWith('sk-') && !apiKey.startsWith('sk-ant-')) {
+                } else if (apiKey && apiKey.startsWith('sk-') && !apiKey.startsWith('sk-ant-') && !apiKey.startsWith('sk-or-')) {
                     provider = 'openai';
                 }
 
@@ -29967,7 +29967,7 @@ Format as precise JSON.`;
     let provider = 'openrouter', model = ((typeof state !== 'undefined' && state.settings && state.settings.selectedModel) || 'anthropic/claude-sonnet-4');
     if (!apiKey && agent) { provider = 'local-agent'; model = agent; }
     else if (apiKey && apiKey.startsWith('sk-ant-')) { provider = 'anthropic'; model = model.replace('anthropic/', ''); }
-    else if (apiKey && apiKey.startsWith('sk-')) { provider = 'openai'; }
+    else if (apiKey && apiKey.startsWith('sk-') && !apiKey.startsWith('sk-or-')) { provider = 'openai'; }
     return { provider: provider, model: model, apiKey: apiKey || undefined };
   }
   window.admiralPreviewPlan = async function(){
