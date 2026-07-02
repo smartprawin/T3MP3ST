@@ -1,4 +1,4 @@
-# 🌩️ T3MP3ST (TEMPEST)
+# 🌩️ T3MP3ST 🌩️
 
 <!-- ⊰ viewing the raw source? sharp eye. there's always a flag for the curious: T3MP3ST{r3c31pt5_n0t_v1b3z} — but the flag that COUNTS you EARN: run `npm run verify-claims` and re-derive every number yourself. LOVE PLINY ⊱ -->
 
