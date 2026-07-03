@@ -22,7 +22,7 @@
 
 </div>
 
-Point T3MP3ST at a target and it works the offensive kill chain (**recon → exploit → report**) from a web War Room or the CLI, powered by a local agent you're already signed into (Claude Code, Codex, or Hermes). A full mission costs **no API keys**.
+Point T3MP3ST at a target and it works the offensive kill chain (**recon → exploit → report**) from a web War Room or the CLI, powered by a local agent you're already signed into (Claude Code, Codex, or Hermes).
 
 Today, the recon engine is live and tool-backed, and the exploit loop is benchmark-proven: 90.1% pass@1 on XBEN, every flag from a live exploit (reproducible below). The full 8-operator swarm is the architecture it grows into; the [status table](#what-ships-today) is exact about what's live, what's scaffolding, and what's still roadmap. Loud about the mission, honest that it's still a mission.
 
@@ -108,7 +108,7 @@ Headline results. Each recomputes from the committed JSON with `npm run verify-c
 - These ran a **single-agent ReAct loop, not the 8-operator swarm.** The swarm is framework architecture; it is not what scored these numbers.
 - Results are system-vs-system: this harness driving a strong current model, not an isolated-harness claim.
 
-XBOW self-reports 85% on its own suite. Ours reproduces from committed artifacts and clears it even at the Wilson floor. Find an open-source harness that does better with the receipts to prove it.
+XBOW self-reports 85% on its own suite. Ours reproduces from committed artifacts and clears it even at the Wilson floor. 
 
 Deeper reading: [WALL_FORENSICS](docs/WALL_FORENSICS.md) (per-challenge misses), [CYBENCH](docs/CYBENCH.md), [INTEGRITY_LEDGER](docs/INTEGRITY_LEDGER.md) (contamination audit and every retraction), [OBSIDIVM](docs/OBSIDIVM.md) (our own live web range).
 
