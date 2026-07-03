@@ -5982,6 +5982,13 @@ app.post('/api/mission/start', async (req: Request, res: Response): Promise<void
     res.status(400).json({ error: 'API key required — pass apiKey, configure one on the server, or connect a local agent (Claude Code / Codex / Hermes)' });
     return;
   }
+  if (provider === 'local-agent') {
+    const localAgent = await requireLiveLocalAgent(model);
+    if (!localAgent.ok) {
+      res.status(503).json({ error: localAgent.error });
+      return;
+    }
+  }
 
   if (targets.length === 0) {
     res.status(400).json({ error: 'At least one target required' });
@@ -6217,6 +6224,7 @@ app.get('/api/mission/status', (_req: Request, res: Response) => {
   res.json({
     active: status.running,
     paused: status.paused,
+    stallReason: status.stallReason,
     name: status.name,
     tickCount: status.tickCount,
     mission: mission ? {
@@ -7378,6 +7386,22 @@ async function refreshConnectedLocalAgentHealth(force = false): Promise<void> {
     current.lastPing = result;
     current.lastHealthCheckAt = Date.now();
   }));
+}
+
+async function requireLiveLocalAgent(model: string | undefined): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+  const id = String(model || 'codex').trim();
+  const entry = connectedLocalAgents.get(id);
+  if (!entry) return { ok: false, error: `local agent "${id}" is not connected — connect it in Settings first` };
+
+  await refreshConnectedLocalAgentHealth(true);
+  const refreshed = connectedLocalAgents.get(id);
+  if (refreshed?.lastPing?.ok) return { ok: true, id };
+
+  return {
+    ok: false,
+    error: `local agent "${id}" is connected but not live` +
+      (refreshed?.lastPing?.error ? ` — ${refreshed.lastPing.error}` : ''),
+  };
 }
 
 // GET /api/agents/local/detect — which agents are installed / authed / ready (no tokens spent)

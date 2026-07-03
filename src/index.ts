@@ -786,6 +786,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
   public resume(): void {
     if (!this.running || !this.paused) return;
     this.paused = false;
+    this.stallReason = null;
     this.emit('command:resumed');
   }
 
@@ -836,6 +837,9 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
 
   /** Track whether we've seeded initial tasks for the current mission */
   private taskSeeded: boolean = false;
+
+  /** Human-readable reason a mission was paused because required work failed. */
+  private stallReason: string | null = null;
 
   /**
    * Main tick loop — seeds tasks, dispatches to operators, advances phases
@@ -889,13 +893,28 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     );
     const inFlight = allMissionTasks.filter(t => this.activeDispatches.has(t.id));
 
-    // If we have tasks, all are done, and nothing is in-flight → advance phase
+    // If we have tasks, all are done, and nothing is in-flight → advance phase.
+    // Failed required tasks are terminal, but they are not successful progress.
+    // Stall instead of walking the phase bar forward with no backend/model work.
     if (allMissionTasks.length > 0 && pendingOrActive.length === 0 && inFlight.length === 0) {
+      const failedCurrentPhase = allMissionTasks.filter(
+        t => t.phase === mission.currentPhase && t.status === 'failed'
+      );
+      if (failedCurrentPhase.length > 0) {
+        const firstError = failedCurrentPhase[0].result?.error;
+        this.stallReason = `stalled in ${mission.currentPhase}: ${failedCurrentPhase.length} required task(s) failed` +
+          (firstError ? ` — ${firstError}` : '');
+        this.paused = true;
+        this.emit('command:paused');
+        return;
+      }
+
       const phaseIndex = mission.phases.indexOf(mission.currentPhase);
       if (phaseIndex === -1) return; // Guard: phase not found (race condition)
       if (phaseIndex < mission.phases.length - 1) {
         // Advance to next phase and generate tasks
         this.mission.advancePhase(mission.id);
+        this.stallReason = null;
         const targets = this.targetEnv.getAllTargets();
         for (const target of targets) {
           this.mission.generateNextPhaseTasks(target.address);
@@ -972,8 +991,12 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
         // double-fire the completion hook.
         if (!this.activeDispatches.has(task.id)) return;
         this.clearDispatch(task.id);
-        taskQueue.complete(task.id, result);
-        this.hooks.onTaskCompleted?.(task);
+        if (result.success === false) {
+          taskQueue.fail(task.id, result.error || result.output || 'task returned unsuccessful result');
+        } else {
+          taskQueue.complete(task.id, result);
+          this.hooks.onTaskCompleted?.(task);
+        }
       }).catch((_error) => {
         if (!this.activeDispatches.has(task.id)) return;
         this.clearDispatch(task.id);
@@ -1199,6 +1222,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     vault: ReturnType<EvidenceVault['getStats']>;
     opsec: ReturnType<OpsecController['getStats']>;
     activeMission: string | null;
+    stallReason: string | null;
   } {
     const activeMission = this.mission.getActiveMission();
 
@@ -1212,6 +1236,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
       vault: this.vault.getStats(),
       opsec: this.opsec.getStats(),
       activeMission: activeMission?.id || null,
+      stallReason: this.stallReason,
     };
   }
 
