@@ -268,6 +268,9 @@ import {
 // TEMPEST COMMAND
 // =============================================================================
 
+const DEFAULT_AGENT_MAX_ITERATIONS = 15;
+const LOCAL_AGENT_MAX_ITERATIONS = Number(process.env.T3MP3ST_LOCAL_AGENT_MAX_ITERATIONS || 30);
+
 /**
  * TEMPEST Command - Main orchestration controller
  */
@@ -1158,8 +1161,11 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     // Attach the agent loop scoped to this archetype's SPECIALIZED role toolkit (defaultTools =
     // the curated per-operator tool allowlist). toolCategories stays as a coarse fallback.
     const profile = ARCHETYPE_PROFILES[archetype];
+    const maxIterations = this.llm.getProvider() === 'local-agent'
+      ? LOCAL_AGENT_MAX_ITERATIONS
+      : DEFAULT_AGENT_MAX_ITERATIONS;
     const agentLoop = new AgentLoop(this.llm, this.arsenal, {
-      maxIterations: 15,
+      maxIterations,
       maxTokens: 50000,
       toolCategories: profile.toolCategories,
       tools: profile.defaultTools,

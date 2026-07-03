@@ -6223,6 +6223,11 @@ tempest.operators.<span class="function">spawn</span>(<span class="string">'scan
                             return;
                         }
 
+                        if (status.paused && status.stallReason) {
+                            resolve(status);
+                            return;
+                        }
+
                         // Update kill chain from mission phase
                         if (status.mission?.currentPhase) {
                             const phaseMap = {
@@ -18252,6 +18257,14 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
 
                     // Poll for mission completion (SSE provides real-time updates, poll for completion detection)
                     const finalStatus = await BackendDispatch.pollUntilComplete((status) => {
+                        if (status.paused && status.stallReason) {
+                            const reason = status.stallReason;
+                            document.getElementById('cmdMissionStatus').textContent = `Stalled — ${reason}`;
+                            document.getElementById('cmdMissionStatus').style.color = '#ff6b6b';
+                            addMissionLog('error', reason);
+                            addIntel('ERROR', reason, 'danger');
+                            return;
+                        }
                         // Periodic status update
                         if (status.operators?.summary) {
                             const ops = status.operators.summary;
@@ -18269,6 +18282,9 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                     }, 3000);
 
                     // Mission complete
+                    if (finalStatus.paused && finalStatus.stallReason) {
+                        throw new Error(finalStatus.stallReason);
+                    }
                     const findingCount = finalStatus.findings?.length || 0;
                     completeMission(null);
                     addIntel('COMMAND', `Backend mission complete. ${findingCount} findings.`, 'success');
