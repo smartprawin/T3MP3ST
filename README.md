@@ -97,7 +97,7 @@ Headline results. Each recomputes from the committed JSON with `npm run verify-c
 | Suite | Result | Context |
 |---|---|---|
 | **XBEN** — XBOW's 104-challenge suite, black-box | **pass@1 mean 90.1%** (Wilson-95 86.2–92.9), floor 91/104 · gpt-5.5 | XBOW self-reports 85% on the same suite; ours reproduces from artifacts |
-| **XBEN** — white-box (reported separately) | pass@1 98.7%, best-ball 104/104 · gpt-5.5 | never blended with the black-box number |
+| **XBEN** — white-box (reported separately) | pass@1 98.7%, best-ball 100% (104/104) · gpt-5.5 | never blended with the black-box number |
 | **Cybench** — 40-task academic bench, Opus 4.8, no hints | 21/40 full corpus, 23/40 clean subset, single-run pass@1 | not the raw-score record (Anthropic reports 76.5% pass@10); the point is measurement integrity |
 | **CVE-Zero** — 10 real post-cutoff (2026) CVEs, hunted cold | 4/10 strict (exact file/line/CWE) | memorization-proof: targets postdate the training cutoff |
 
