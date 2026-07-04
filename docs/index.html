@@ -18308,7 +18308,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                         setFidelity('off');
                         const why = isScopeBlock
                             ? 'the scope gate refused this target (no valid approval/receipt for it)'
-                            : 'the live-tools backend is unavailable';
+                            : `the live-tools backend failed: ${msg}`;
                         addIntel('REFUSED', `Refusing to simulate against external target ${target} — ${why}. Authorize the target (mint a receipt) or point at a local/practice target.`, 'danger');
                         addMissionLog('error', `Refused: will not run an LLM-only simulation against external target ${target} (${why})`);
                         toast(`Won't fake a run against ${target} — ${why}`, 'error');
