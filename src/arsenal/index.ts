@@ -11,6 +11,7 @@ import { promisify } from 'util';
 import * as net from 'net';
 import * as dns from 'dns';
 import * as tls from 'tls';
+import { ApprovalController, isGatedRisk, type ApprovalRequest } from './approval.js';
 
 const execFileAsync = promisify(execFile);
 import type {
@@ -19,6 +20,7 @@ import type {
   ToolResult,
   Target,
   LLMToolDefinition,
+  RiskTier,
 } from '../types/index.js';
 
 const dnsResolve = promisify(dns.resolve);
@@ -82,8 +84,121 @@ export interface ToolExecution {
 // ARSENAL
 // =============================================================================
 
+// ── Egress scope gate (Phase-0 pack-hunt safety primitive) ──────────────────────────────────
+// A HARD allowlist enforced inside Arsenal.execute() BEFORE any handler runs, so an LLM-supplied
+// tool target can never reach an out-of-scope host. When no scope is set (library/test mode)
+// enforcement is off; the server/mission sets it from the authorized targets so live runs are gated.
+// This closes the "a keyless pack operator fires nuclei/nmap/sqlmap at an off-target host" hole:
+// the only prior scope check was at the HTTP boundary, keyed to the mission target — the per-tool
+// target the model actually supplies was never checked.
+export interface ArsenalScope {
+  /** exact hosts / registrable domains explicitly authorized (subdomains allowed) */
+  allowedHosts: string[];
+  /** allow 127.0.0.0/8, localhost, ::1 */
+  allowLoopback: boolean;
+  /** allow RFC-1918 / link-local / ULA lab ranges */
+  allowPrivate: boolean;
+}
+
+/** The parameter keys a networked tool reads its target from (dns/web/vuln handlers). */
+const SCOPE_TARGET_KEYS = ['url', 'target', 'host', 'hostname', 'domain', 'address', 'ip', 'endpoint', 'base_url', 'rhosts', 'rhost'];
+
+/** Normalize a target-ish value to a bare lowercase host (strip scheme/user/port/path). null if not host-like. */
+export function hostFromTargetValue(v: unknown): string | null {
+  if (typeof v !== 'string' || !v.trim()) return null;
+  let s = v.trim();
+  try { if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) s = new URL(s).hostname; } catch { /* treat as bare host */ }
+  s = s.replace(/^[^@/]*@/, '').replace(/\/.*$/, '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+  return s.toLowerCase() || null;
+}
+
+function isLoopbackTargetHost(h: string): boolean {
+  return h === 'localhost' || h === '::1' || /^127(?:\.\d{1,3}){3}$/.test(h);
+}
+function isPrivateTargetHost(h: string): boolean {
+  return /^10(?:\.\d{1,3}){3}$/.test(h)
+    || /^192\.168(?:\.\d{1,3}){2}$/.test(h)
+    || /^172\.(1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}$/.test(h)
+    || /^169\.254(?:\.\d{1,3}){2}$/.test(h)          // link-local
+    || /^(fc|fd)[0-9a-f]{2}:/i.test(h);              // IPv6 ULA
+}
+
+/** The narrowest CIDR prefix that keeps a private/loopback host's whole block in scope — a wider
+ *  (smaller-number) mask would spill outside it. Used to scope-validate a CIDR TARGET's range. */
+function privateBlockMinMask(h: string): number {
+  if (/^192\.168\./.test(h) || /^169\.254\./.test(h)) return 16;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return 12;
+  return 8; // 10/8, 127/8, and (conservatively) IPv6 ULA
+}
+
+/** null = in scope (or no host to check); otherwise the out-of-scope host/range that must be blocked. */
+export function scopeViolation(scope: ArsenalScope | null, context: ToolContext): string | null {
+  if (!scope) return null; // enforcement off until configured
+  // FAIL CLOSED on a value that LOOKS like a network target (scheme-relative "//host" or a
+  // "scheme://…") but yields no parseable host — that's the bypass ("//evil.com" /
+  // "file:///etc/passwd" host-normalize to an empty string and would otherwise slip past the gate).
+  // A plain local path ("/code/src") is NOT a network target and has no host, so it's skipped — local
+  // file-analysis tools (semgrep/trivy/slither) keep working. (adversarial-review C1)
+  const bypassLooking = (v: string): boolean => v.startsWith('//') || v.includes('://');
+  const candidates: Array<{ h: string; v: string }> = [];
+  const raws: unknown[] = [context.target?.address, ...SCOPE_TARGET_KEYS.map((k) => (context.parameters || {})[k])];
+  for (const raw of raws) {
+    if (typeof raw !== 'string' || !raw.trim()) continue;
+    const v = raw.trim();
+    const h = hostFromTargetValue(v);
+    if (!h) {
+      if (bypassLooking(v)) return v; // network-target-shaped but unparseable → block
+      continue; // plain path / non-network value → not a scope target
+    }
+    candidates.push({ h, v });
+  }
+  const allow = scope.allowedHosts.map(a => a.toLowerCase());
+  for (const { h, v } of candidates) {
+    // How is the BASE host admitted — and what CIDR prefix keeps the WHOLE range inside that block?
+    // hostFromTargetValue strips the mask, so "10.0.0.0/0" (base 10.0.0.0 private) would otherwise
+    // sweep the entire internet past a scope authorizing only that base. Validate the range, not the
+    // base. (adversarial-review CIDR mask-strip escape)
+    let minMask: number;
+    if (scope.allowLoopback && isLoopbackTargetHost(h)) minMask = 8;              // 127/8, ::1
+    else if (scope.allowPrivate && isPrivateTargetHost(h)) minMask = privateBlockMinMask(h);
+    else if (allow.some(a => a === h || h.endsWith('.' + a))) minMask = 32;        // exact-allowed host → only /32
+    else return h; // base host out of scope
+    // treat a trailing "/N" as a CIDR mask ONLY on a bare host/ip (no scheme) — not a URL path segment.
+    const cidr = !v.includes('://') && v.match(/^[^/]+\/(\d{1,3})$/);
+    if (cidr && parseInt(cidr[1], 10) < minMask) return v; // CIDR range extends beyond the authorized block
+  }
+  return null;
+}
+
+/** Best-effort target for an approval request/warning — the first target-like param, else the
+ *  context target address. Informational only (the scope gate does the real host math). */
+function approvalTargetOf(context: ToolContext): string | undefined {
+  const params = context.parameters || {};
+  for (const k of SCOPE_TARGET_KEYS) {
+    const v = params[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return context.target?.address;
+}
+
+/** A one-line human-readable summary of a tool call — tool + a few scalar params + target — for the
+ *  approval warning and the audit trail. Object/array params are omitted to keep it short + safe. */
+function describeToolAction(toolName: string, context: ToolContext): string {
+  const summary = Object.entries(context.parameters || {})
+    .filter(([, v]) => v !== undefined && v !== null && typeof v !== 'object')
+    .slice(0, 4)
+    .map(([k, v]) => `${k}=${String(v).slice(0, 48)}`)
+    .join(' ');
+  const target = approvalTargetOf(context);
+  return `${toolName}${summary ? ` (${summary})` : ''}${target ? ` → ${target}` : ''}`;
+}
+
 export class Arsenal extends EventEmitter<ArsenalEvents> {
   private tools: Map<string, CustomTool> = new Map();
+  /** Authorized egress scope; null = enforcement off (set by the server/mission for live runs). */
+  private scope: ArsenalScope | null = null;
+  /** Capability approval gate; null = gating off (backward-compat). The engine wires one for live runs. */
+  private approval: ApprovalController | null = null;
   private executions: ToolExecution[] = [];
 
   /**
@@ -124,6 +239,14 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
     return this.getAllTools().filter(t => t.category === category);
   }
 
+  /** Set (or clear with null) the authorized egress scope enforced in execute(). */
+  setScope(scope: ArsenalScope | null): void { this.scope = scope; }
+  getScope(): ArsenalScope | null { return this.scope; }
+
+  /** Set (or clear) the capability-approval gate enforced in execute() for intrusive/dangerous tools. */
+  setApprovalController(approval: ApprovalController | null): void { this.approval = approval; }
+  getApprovalController(): ApprovalController | null { return this.approval; }
+
   /**
    * Execute a tool
    */
@@ -134,6 +257,38 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
     const tool = this.tools.get(toolName);
     if (!tool) {
       throw new Error(`Tool "${toolName}" not found`);
+    }
+
+    // Egress scope gate: deny out-of-scope network targets BEFORE the handler runs. A tool call
+    // never reaches a host outside the authorized scope, regardless of what the model supplied.
+    const blockedHost = scopeViolation(this.scope, context);
+    if (blockedHost) {
+      const denied: ToolResult = {
+        success: false,
+        error: `SCOPE DENIED: target '${blockedHost}' is not in the authorized scope — ${toolName} refused before execution. Only authorized / loopback / lab targets are permitted.`,
+      };
+      this.emit('tool:error', { tool, error: new Error(denied.error) });
+      return denied;
+    }
+
+    // Capability approval + spicy-action warning gate: an intrusive/credential/dangerous tool is inert
+    // until it has been approved (interactively "approve once, then free", or via the headless
+    // pre-authorization allowlist); the hottest actions also fire a loud, audited, non-blocking
+    // warning. Safe/active tools pass straight through. No controller wired = gating off (backward-compat).
+    if (this.approval && isGatedRisk(tool.riskTier)) {
+      const request: ApprovalRequest = {
+        tool: toolName,
+        risk: tool.riskTier,
+        operator: context.operator,
+        target: approvalTargetOf(context),
+        action: describeToolAction(toolName, context),
+      };
+      const decision = await this.approval.gate(request);
+      if (!decision.allowed) {
+        const denied: ToolResult = { success: false, error: `APPROVAL REQUIRED: ${decision.reason}` };
+        this.emit('tool:error', { tool, error: new Error(denied.error) });
+        return denied;
+      }
     }
 
     const execution: ToolExecution = {
@@ -189,9 +344,13 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
   /**
    * Convert registered tools to LLM tool definitions for function calling
    */
-  getToolDefinitions(categories?: string[]): LLMToolDefinition[] {
+  getToolDefinitions(categories?: string[], names?: string[]): LLMToolDefinition[] {
     let tools = this.getAllTools();
-    if (categories?.length) {
+    // A per-operator NAME allowlist (the archetype's role toolkit) is the precise gate and
+    // takes precedence over the coarse category filter; fall back to categories, then to all.
+    if (names?.length) {
+      tools = tools.filter(t => names.includes(t.name));
+    } else if (categories?.length) {
       tools = tools.filter(t => categories.includes(t.category));
     }
     return tools.map(tool => {
@@ -271,6 +430,29 @@ export function createToolContext(
 // =============================================================================
 // BUILT-IN TOOLS
 // =============================================================================
+
+/**
+ * The built-in probes that are genuinely "spicy" — live credential attacks and active injection
+ * testing. They ship UNGATED (no riskTier below) so every prior run and the headline benchmark keep
+ * firing them freely — their safety boundary is the always-on egress scope gate. An operator who wants
+ * the approval fail-safe to blanket these too opts in with T3MP3ST_GATE_BUILTINS=1, which applies these
+ * tiers via stampSpicyBuiltin() at registration. Kept here, next to BUILTIN_TOOLS, as the single source
+ * of truth for which built-ins are spicy.
+ */
+export const SPICY_BUILTIN_TIERS: Readonly<Record<string, RiskTier>> = {
+  password_spray: 'credential',
+  hash_crack: 'credential',
+  sqli_scan: 'intrusive',
+  xss_scan: 'intrusive',
+};
+
+/** Copy of `tool` stamped with a gated riskTier iff it is a spicy built-in that isn't already tiered;
+ *  otherwise the tool unchanged. Never mutates the shared BUILTIN_TOOLS array — only clones when it
+ *  stamps — so the default (ungated) registration and this opt-in path can coexist. */
+export function stampSpicyBuiltin(tool: CustomTool): CustomTool {
+  const tier = SPICY_BUILTIN_TIERS[tool.name];
+  return tier && tool.riskTier === undefined ? { ...tool, riskTier: tier } : tool;
+}
 
 export const BUILTIN_TOOLS: CustomTool[] = [
   // =============================================================================

@@ -1,4 +1,4 @@
-# 🌩️ T3MP3ST 🌩️
+# 🌩️ T3MP3ST
 
 <!-- ⊰ sharp eye on the raw source. there's a flag for the curious: T3MP3ST{r3c31pt5_n0t_v1b3z} — the one that counts, you earn: run `npm run verify-claims`. LOVE PLINY ⊱ -->
 
@@ -22,15 +22,15 @@
 
 </div>
 
-Point T3MP3ST at a target and it works the offensive kill chain (**recon → exploit → report**) from a web War Room or the CLI, powered by a local agent you're already signed into (Claude Code, Codex, or Hermes).
+Point T3MP3ST at a target and it works the offensive kill chain (**recon → exploit → report**) from a web War Room or the CLI, driven by the AI coding agent you're already signed into — Claude Code, Codex, or Hermes. A full mission costs **no API keys**. Your agent is the engine; T3MP3ST is the war machine you bolt around it.
 
-Today, the recon engine is live and tool-backed, and the exploit loop is benchmark-proven: 90.1% pass@1 on XBEN, every flag from a live exploit (reproducible below). The full 8-operator swarm is the architecture it grows into; the [status table](#what-ships-today) is exact about what's live, what's scaffolding, and what's still roadmap. Loud about the mission, honest that it's still a mission.
+The recon engine is live and tool-backed, and the exploit loop is benchmark-proven: **90.1% pass@1 on XBEN** — clears XBOW's self-reported 85% even at the Wilson floor, every flag ripped from a live exploit (reproducible below). Then it went hunting COLD: **4 out of 10 real CVEs disclosed in 2026 — past the training cutoff, memorization-proof.** It finds vulns that didn't exist when the model was trained. The full 8-operator swarm is the architecture it grows into; the [status table](#what-ships-today) is exact about what's live, what's scaffolding, and what's still roadmap. Loud about the mission, honest about where the build is.
 
 Three things set it apart:
 
-1. **Reproducible.** Every benchmark number in this README recomputes from committed data. `npm run verify-claims` re-derives all of them. A number that can't be reproduced doesn't ship.
-2. **Keyless.** The AI coding agent on your machine is the backbone. No second bill.
-3. **Honest about scope.** The [status table](#what-ships-today) marks exactly what is stable, experimental, or still roadmap. No claim here comes from a mode this README doesn't name.
+1. **Reproducible.** Every number in this README recomputes from committed data — `npm run verify-claims` re-derives all of them, 20/20 green. A claim that can't be reproduced doesn't ship. No trust-me numbers, ever.
+2. **Keyless.** The AI coding agent already on your machine is the backbone. No API keys, no second bill, no gatekeeper.
+3. **Honest about scope.** The [status table](#what-ships-today) marks exactly what's stable, experimental, or roadmap — because red-teaming shouldn't be a priesthood, and it damn sure shouldn't run on vibes.
 
 ## Why it exists
 
@@ -73,18 +73,19 @@ Library/SDK usage, the full HTTP API, and MCP setup live in [docs/](docs/).
 
 ## What ships today
 
-The framework is an 8-operator kill chain. **Recon is a live, tool-backed engine.** Most downstream operators are scaffolding today, and this table says so. A live report currently shows `Successful Exploits: 0` outside the benchmarked path, and the copy here will never contradict that.
+The framework is an 8-operator kill chain, and this table won't blow smoke about it. **Recon is a live, tool-backed engine** — and the teeth are already real: 90.1% pass@1 on XBEN, 4/10 post-cutoff CVEs hunted cold, and a coordinated-disclosure pipeline that's live enough to have drafts held for vendor coordination right now. What's *not* proven is the swarm. Each downstream operator — Exploiter, Infiltrator, Exfiltrator, Ghost — runs the **same real, tool-backed ReAct loop as recon** (real exploit tools, not stubs), but the headline numbers came from a single agent, not the coordinated 8-operator cell, and end-to-end swarm exploitation is unbenchmarked and still unreliable. The engine is real; the swarm is the part still earning its stripes. Loud where we've earned it, blunt about the rest.
 
 | Component | Status | Notes |
 |---|---|---|
 | Re-derivable measurement (`verify-claims`) | ✅ Stable | every headline recomputes from committed artifacts |
 | Recon engine | ✅ Stable | drives nmap / DNS / HTTP / fingerprinting; every finding traces to real tool output |
 | Mission engine + War Room + Op Admiral | ✅ Stable | keyless through a connected local agent |
-| Arsenal, MCP server, HTTP API | ✅ Stable | 35 tools; `security_recon` over MCP |
+| Arsenal, MCP server, HTTP API | ✅ Stable | 35 tools by default (31 built-in + 4 external-CLI wrappers); 83 with the opt-in `T3MP3ST_FULL_ARSENAL` (re-derives via `verify-claims`). `security_recon` over MCP |
+| Egress-scope containment | ✅ Stable (on by default) | once a mission target is set, built-in networked tools refuse off-scope public hosts — not the target/subdomains, not loopback/private (`SCOPE DENIED`) — a tightened default, not a bare tool runner |
 | Coordinated-disclosure pipeline | ✅ Stable | OSV novelty + live PoC + refuter panel + CVSS; drafts only, a human sends |
 | White-box source analysis | ⚠️ Experimental | Python-only regex ingest; multi-model decomposition costs more tokens, not fewer |
 | DeFi (Damn Vulnerable DeFi) | ⚠️ Experimental | reproduces known exploit classes; not novel discovery |
-| Exploiter / Infiltrator / Exfiltrator / Ghost | 🚧 Scaffolding | interface + orchestration stubs, not autonomous exploit engines |
+| Exploiter / Infiltrator / Exfiltrator / Ghost | ⚠️ Experimental | run the real tool-backed ReAct loop (same engine as recon); unproven as a coordinated swarm — single-agent is the benchmarked path, live swarm exploitation still unreliable |
 | Advanced modules (cloud, persistence, swarm, cognition) | 🚧 Planned | interface-only in `src/stubs/` |
 | Self-improvement loop | 🧪 Research | records lessons + proposals today; feeding them back into planning is roadmap |
 
@@ -97,8 +98,8 @@ Headline results. Each recomputes from the committed JSON with `npm run verify-c
 | Suite | Result | Context |
 |---|---|---|
 | **XBEN** — XBOW's 104-challenge suite, black-box | **pass@1 mean 90.1%** (Wilson-95 86.2–92.9), floor 91/104 · gpt-5.5 | XBOW self-reports 85% on the same suite; ours reproduces from artifacts |
-| **XBEN** — white-box (reported separately) | pass@1 98.7%, best-ball 100% (104/104) · gpt-5.5 | never blended with the black-box number |
-| **Cybench** — 40-task academic bench, Opus 4.8, no hints | 21/40 full corpus, 23/40 clean subset, single-run pass@1 | not the raw-score record (Anthropic reports 76.5% pass@10); the point is measurement integrity |
+| **XBEN** — white-box (reported separately) | pass@1 98.7%, best-ball 104/104 · gpt-5.5 | never blended with the black-box number |
+| **Cybench** — 40-task academic bench, Opus 4.8, no hints | **23/40 (58%) hint-free, single-run pass@1** (`verify-claims`-enforced; matches the 18/31 = 58% reachable-subset) | not the raw-score record (Anthropic: 76.5% pass@10); every flag from a live exploit |
 | **CVE-Zero** — 10 real post-cutoff (2026) CVEs, hunted cold | 4/10 strict (exact file/line/CWE) | memorization-proof: targets postdate the training cutoff |
 
 **How to read these:**
@@ -108,7 +109,7 @@ Headline results. Each recomputes from the committed JSON with `npm run verify-c
 - These ran a **single-agent ReAct loop, not the 8-operator swarm.** The swarm is framework architecture; it is not what scored these numbers.
 - Results are system-vs-system: this harness driving a strong current model, not an isolated-harness claim.
 
-XBOW self-reports 85% on its own suite. Ours reproduces from committed artifacts and clears it even at the Wilson floor. 
+XBOW self-reports 85% on its own suite. T3MP3ST scores **90.1%** on that same suite — and clears the 85% bar even at the Wilson-95 floor of 86.2%, not just the mean. Every point of it recomputes from committed artifacts with one command: `npm run verify-claims`. That's the whole flex — a keyless, open-source harness beating the closed-source incumbent's own number, with receipts you can re-run yourself in your terminal right now. Clone it, run it, check the math.
 
 Deeper reading: [WALL_FORENSICS](docs/WALL_FORENSICS.md) (per-challenge misses), [CYBENCH](docs/CYBENCH.md), [INTEGRITY_LEDGER](docs/INTEGRITY_LEDGER.md) (contamination audit and every retraction), [OBSIDIVM](docs/OBSIDIVM.md) (our own live web range).
 

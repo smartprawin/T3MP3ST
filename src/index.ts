@@ -221,7 +221,20 @@ import { OperatorCell, OperatorAgent, ARCHETYPE_PROFILES } from './operators/ind
 import { MissionControl, TaskQueue } from './mission/index.js';
 import { TargetEnvironment } from './target/index.js';
 import { EvidenceVault } from './evidence/index.js';
-import { Arsenal, BUILTIN_TOOLS, EXTERNAL_TOOLS } from './arsenal/index.js';
+import {
+  Arsenal,
+  BUILTIN_TOOLS,
+  EXTERNAL_TOOLS,
+  stampSpicyBuiltin,
+  hostFromTargetValue,
+  scopeViolation,
+  runSubprocess,
+  isToolAvailable,
+} from './arsenal/index.js';
+import { buildAdapterTools } from './arsenal/adapter-tools.js';
+import { buildPostExTools } from './arsenal/post-ex.js';
+import { ApprovalController, type ApprovalRequest } from './arsenal/approval.js';
+import { TOOL_ADAPTERS } from './arsenal/catalog.js';
 import { OpsecController, createBalancedOpsecConfig } from './opsec/index.js';
 import { CommsChannel } from './comms/index.js';
 import { AnalysisEngine } from './analysis/index.js';
@@ -263,6 +276,8 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
   public readonly targetEnv: TargetEnvironment;
   public readonly vault: EvidenceVault;
   public readonly arsenal: Arsenal;
+  /** Capability approval + spicy-action warning gate for intrusive/dangerous tools. */
+  public readonly approval: ApprovalController;
   public readonly opsec: OpsecController;
   public readonly comms: CommsChannel;
   public readonly analysis: AnalysisEngine;
@@ -331,9 +346,56 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     this.opsec = new OpsecController(config.opsec);
     this.comms = new CommsChannel();
 
-    // Register built-in tools and external CLI wrappers
-    this.arsenal.registerMany(BUILTIN_TOOLS);
+    // Register built-in tools and external CLI wrappers. The built-in intrusive/credential probes
+    // (sqli_scan, password_spray, …) are the pre-existing honest baseline and stay UNGATED by default —
+    // zero regression: the headline benchmark and every prior run keep firing them freely. Opt in with
+    // T3MP3ST_GATE_BUILTINS=1 to stamp the spicy ones with a riskTier so the same approval gate that
+    // fences the specialist arsenal (metasploit/hydra) also fences them.
+    const gateBuiltins = /^(1|true|yes|on)$/i.test(process.env.T3MP3ST_GATE_BUILTINS ?? '');
+    this.arsenal.registerMany(gateBuiltins ? BUILTIN_TOOLS.map(stampSpicyBuiltin) : BUILTIN_TOOLS);
     this.arsenal.registerMany(EXTERNAL_TOOLS);
+
+    // Capability approval + spicy-action warning gate. An intrusive/credential/dangerous tool is
+    // INERT until it's approved. Two ways in: (1) headless — a pre-authorization allowlist up front
+    // via T3MP3ST_APPROVED_TOOLS (comma list) runs those tools free; (2) interactive — a host wires an
+    // approver so the operator approves a tool once, then it's free. No approver + not pre-approved =
+    // fail-safe DENY (an unattended run never self-fires an exploit). Every gated call is audited; the
+    // spicy ones (exploits / cred attacks) surface a loud warning. Wired onto the arsenal below so the
+    // gate runs inside Arsenal.execute() alongside the egress scope gate.
+    const preApprovedTools = (process.env.T3MP3ST_APPROVED_TOOLS ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    this.approval = new ApprovalController({
+      preApprovedTools,
+      onWarning: (req: ApprovalRequest) => {
+        // Loud, non-blocking warning so a spicy action is always SEEN. A host UI can also read
+        // this.approval.getAudit() or replace the controller for a richer surface.
+        // eslint-disable-next-line no-console
+        console.warn(`⚠️  SPICY ACTION [${req.risk}] ${req.operator ? req.operator + ' → ' : ''}${req.action}`);
+      },
+      // Bridge every gated decision to the dashboard's live approval/audit feed (connectBroadcast
+      // forwards this engine event to the SSE channel as `arsenal.approval`).
+      onDecision: (record) => this.emit('approval:decision', record),
+    });
+    this.arsenal.setApprovalController(this.approval);
+
+    // Phase-1 (OPT-IN): arm the specialist arsenal. Gated behind T3MP3ST_FULL_ARSENAL so the honest
+    // bash-only benchmark baseline (built-ins only) stays uncontaminated — a full-power / pack hunt
+    // sets it. The generic factory NEVER mints catalog_only/import_only adapters; the post-ex drivers
+    // (metasploit/hydra) are hand-written and each carries a riskTier so the approval gate above fences
+    // them. The egress scope gate in Arsenal.execute() still fences every target; the in-handler
+    // scopeOk here is a second belt-and-braces check on the resolved per-adapter target.
+    if (/^(1|true|on)$/i.test(process.env.T3MP3ST_FULL_ARSENAL ?? '')) {
+      const deps = {
+        runSubprocess,
+        isToolAvailable,
+        scopeOk: (target: string) => scopeViolation(this.arsenal.getScope(), { parameters: { target } }) === null,
+      };
+      const existing = new Set(this.arsenal.getAllTools().map((t) => t.name));
+      this.arsenal.registerMany(buildAdapterTools(TOOL_ADAPTERS, deps, existing));
+      this.arsenal.registerMany(buildPostExTools(deps)); // metasploit_module (dangerous) + hydra_bruteforce (credential)
+    }
 
     // Advanced modules
     this.exploit = new ExploitEngine();
@@ -424,11 +486,25 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     // Only mark "seeded" if a mission actually exists — otherwise generateTasksForTarget
     // no-ops and we'd falsely suppress the tick-loop seeding (leaving operators idle).
     this.targetEnv.on('target:added', (target) => {
+      this.syncArsenalScope();
       if (this.mission.getActiveMission()) {
         this.mission.generateTasksForTarget(target.address);
         this.taskSeeded = true;
       }
     });
+  }
+
+  /**
+   * Recompute the arsenal's authorized egress scope from the mission's targets. Operators can only
+   * reach the authorized target hosts (+ loopback + lab/private ranges); every other host is refused
+   * at arsenal.execute() before the handler runs. Called whenever a target is added, so a keyless
+   * operator can never point a networked tool at an off-target host.
+   */
+  private syncArsenalScope(): void {
+    const allowedHosts = this.targetEnv.getAllTargets()
+      .map((t) => hostFromTargetValue(t.address))
+      .filter((h): h is string => !!h);
+    this.arsenal.setScope({ allowedHosts, allowLoopback: true, allowPrivate: true });
   }
 
   /**
@@ -951,6 +1027,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     this.on('credential:harvested', (data) => broadcast('credential', data));
     this.on('detection:triggered', (data) => broadcast('detection', data));
     this.on('mission:phase_changed', (data) => broadcast('phase_changed', data));
+    this.on('approval:decision', (data) => broadcast('arsenal.approval', data));
     this.on('tick', (count) => {
       // Broadcast status every 5 ticks to avoid flooding
       if (typeof count === 'number' && count % 5 === 0) {
@@ -973,12 +1050,14 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     const operator = this.cell.spawnOperator(callsign, archetype);
     this.setupOperatorEvents(operator);
 
-    // Attach the agent loop scoped to this archetype's tool categories
+    // Attach the agent loop scoped to this archetype's SPECIALIZED role toolkit (defaultTools =
+    // the curated per-operator tool allowlist). toolCategories stays as a coarse fallback.
     const profile = ARCHETYPE_PROFILES[archetype];
     const agentLoop = new AgentLoop(this.llm, this.arsenal, {
       maxIterations: 15,
       maxTokens: 50000,
       toolCategories: profile.toolCategories,
+      tools: profile.defaultTools,
     });
     operator.attachArsenal(this.arsenal, agentLoop);
 
@@ -1067,6 +1146,7 @@ export interface Tempest {
   targetEnv: TargetEnvironment;
   vault: EvidenceVault;
   arsenal: Arsenal;
+  approval: ApprovalController;
   opsec: OpsecController;
   comms: CommsChannel;
   analysis: AnalysisEngine;
@@ -1110,6 +1190,7 @@ export function createTempest(config: TempestConfig): Tempest {
     targetEnv: command.targetEnv,
     vault: command.vault,
     arsenal: command.arsenal,
+    approval: command.approval,
     opsec: command.opsec,
     comms: command.comms,
     analysis: command.analysis,
