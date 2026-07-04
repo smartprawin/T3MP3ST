@@ -17,6 +17,7 @@ import { join } from 'path';
 import { promisify } from 'util';
 import { createHash, randomUUID } from 'crypto';
 import { config } from './config/index.js';
+import { redactString, redactLedgerText, redactSecrets } from './redact.js';
 import { LLMBackbone } from './llm/index.js';
 import { TempestCommand } from './index.js';
 import { OpGeneral } from './general/index.js';
@@ -130,28 +131,6 @@ const PAYLOAD_DB = {
     ssrf: ['<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://169.254.169.254/latest/meta-data/">]><foo>&xxe;</foo>']
   }
 };
-
-const SECRET_PATTERNS: Record<string, { pattern: RegExp; severity: string; provider: string }> = {
-  aws_access_key: { pattern: /AKIA[0-9A-Z]{16}/g, severity: 'critical', provider: 'AWS' },
-  aws_secret_key: { pattern: /[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=])/g, severity: 'critical', provider: 'AWS' },
-  gcp_api_key: { pattern: /AIza[0-9A-Za-z\-_]{35}/g, severity: 'high', provider: 'GCP' },
-  github_token: { pattern: /ghp_[A-Za-z0-9]{36}/g, severity: 'critical', provider: 'GitHub' },
-  github_oauth: { pattern: /gho_[A-Za-z0-9]{36}/g, severity: 'critical', provider: 'GitHub' },
-  anthropic_api_key: { pattern: /sk-ant-api\d{2}-[A-Za-z0-9_\-]{16,}/g, severity: 'critical', provider: 'Anthropic' },
-  openai_api_key: { pattern: /sk-[A-Za-z0-9_\-]{20,}/g, severity: 'critical', provider: 'OpenAI' },
-  gitlab_token: { pattern: /glpat-[A-Za-z0-9\-_]{20}/g, severity: 'critical', provider: 'GitLab' },
-  jwt: { pattern: /eyJ[A-Za-z0-9-_]+\.eyJ[A-Za-z0-9-_]+\.[A-Za-z0-9-_.+/=]*/g, severity: 'high', provider: 'JWT' },
-  stripe_live: { pattern: /sk_live_[0-9a-zA-Z]{24}/g, severity: 'critical', provider: 'Stripe' },
-  slack_token: { pattern: /xox[baprs]-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*/g, severity: 'high', provider: 'Slack' },
-  postgres_uri: { pattern: /postgres(ql)?:\/\/[^:]+:[^@]+@[^/]+\/\w+/gi, severity: 'critical', provider: 'PostgreSQL' },
-  mongodb_uri: { pattern: /mongodb(\+srv)?:\/\/[^:]+:[^@]+@[^/]+/gi, severity: 'critical', provider: 'MongoDB' },
-  rsa_private: { pattern: new RegExp('-----BEGIN RSA ' + 'PRIVATE KEY-----', 'g'), severity: 'critical', provider: 'RSA' },
-  openssh_private: { pattern: new RegExp('-----BEGIN OPENSSH ' + 'PRIVATE KEY-----', 'g'), severity: 'critical', provider: 'OpenSSH' },
-  password_field: { pattern: /password["\s]*[:=]["\s]*[^"'\s]{4,}/gi, severity: 'high', provider: 'Generic' },
-  api_key_field: { pattern: /api[_-]?key["\s]*[:=]["\s]*["']?[A-Za-z0-9\-_]{16,}["']?/gi, severity: 'high', provider: 'Generic' }
-};
-
-
 
 // =============================================================================
 // SERVER CONFIGURATION
@@ -401,41 +380,8 @@ async function executeCommand(command: string, timeout = 30000): Promise<ToolRes
 
 
 
-function redactString(value: string): string {
-  let redacted = value;
-  for (const { pattern } of Object.values(SECRET_PATTERNS)) {
-    pattern.lastIndex = 0;
-    redacted = redacted.replace(pattern, '[redacted]');
-  }
-  return redacted
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]{16,}/gi, 'Bearer [redacted]')
-    .replace(/(api[_-]?key|token|secret|password)=([^&\s]+)/gi, '$1=[redacted]');
-}
-
-function redactLedgerText(value: string, limit = 4000): string {
-  const redacted = redactString(value);
-  if (redacted.length <= limit) return redacted;
-  return `${redacted.slice(0, limit)}...[truncated ${redacted.length - limit} chars]`;
-}
-
-function redactSecrets(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (typeof value === 'string') return redactString(value);
-  if (value === null || typeof value !== 'object') return value;
-  if (seen.has(value)) return '[circular]';
-  seen.add(value);
-
-  if (Array.isArray(value)) return value.map(item => redactSecrets(item, seen));
-
-  const result: Record<string, unknown> = {};
-  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-    if (/(api[_-]?key|authorization|cookie|credential|password|secret|token)/i.test(key)) {
-      result[key] = '[redacted]';
-    } else {
-      result[key] = redactSecrets(nested, seen);
-    }
-  }
-  return result;
-}
+// redactString / redactLedgerText / redactSecrets live in ./redact.ts (pure + unit-tested in isolation;
+// importing this file would start the HTTP listener). They are imported at the top of this module.
 
 function rejectDuplicateLedgerId<T>(res: Response, ledger: Map<string, T>, id: unknown, label: string, collectionPath: string): boolean {
   if (typeof id !== 'string' || !id.trim() || !ledger.has(id.trim())) return false;
@@ -452,12 +398,12 @@ function clientLedgerId(value: unknown, prefix: string): string {
 }
 
 // =============================================================================
-// DUAL-MODE CONTRACTS - STANDALONE + PLINYOS ORGAN
+// DUAL-MODE CONTRACTS - STANDALONE + ORGAN MODE
 // =============================================================================
 
-type TempestMode = 'standalone' | 'plinyos';
+type TempestMode = 'standalone' | 'organ';
 type DraftStatus = 'draft' | 'queued' | 'launched' | 'archived';
-type DraftSource = 'human' | 'agent' | 'plinyos';
+type DraftSource = 'human' | 'agent' | 'organ';
 type MissionFamily = 'web_api' | 'ai_red_team' | 'cloud_infra' | 'smart_contract' | 'code_supply_chain' | 'crypto_secrets' | 'reverse_binary' | 'agent_warfare' | 'social_osint' | 'reporting_remediation';
 type OperationMode = 'wizard' | 'agent_harness' | 'expert_console' | 'range' | 'review_only';
 type GuardAction = 'command_execution' | 'network_request' | 'mission_execution' | 'autonomous_execution' | 'model_call';
@@ -811,12 +757,12 @@ const ROUTE_SCORECARDS: Record<string, Record<string, number | string>> = {
 };
 
 function currentMode(): TempestMode {
-  return process.env.PLINYOS_STATE_DIR || process.env.T3MP3ST_MODE === 'plinyos' ? 'plinyos' : 'standalone';
+  return process.env.ORGAN_STATE_DIR || process.env.T3MP3ST_MODE === 'organ' ? 'organ' : 'standalone';
 }
 
 function stateRoot(): string {
   return process.env.T3MP3ST_STATE_DIR ||
-    (process.env.PLINYOS_STATE_DIR ? `${process.env.PLINYOS_STATE_DIR}/organs/t3mp3st` : 'memory');
+    (process.env.ORGAN_STATE_DIR ? `${process.env.ORGAN_STATE_DIR}/organs/t3mp3st` : 'memory');
 }
 
 function stateFilePath(): string | null {
@@ -985,7 +931,7 @@ function replaceMapContents<T extends { id: string }>(map: Map<string, T>, value
 
 function buildStateSnapshot(): Record<string, unknown> {
   return {
-    schema_version: 'plinyos.t3mp3st_state/v1',
+    schema_version: 't3mp3st.state/v1',
     savedAt: nowIso(),
     mode: currentMode(),
     missionDrafts: [...missionDrafts.values()],
@@ -1142,7 +1088,7 @@ function createApprovalRequest(action: GuardAction, target: string, reason: stri
     reason,
     status: 'pending',
     operationId: typeof operationDraft?.operation_id === 'string' ? operationDraft.operation_id : undefined,
-    requestedBy: ['human', 'agent', 'plinyos'].includes(String(body.source)) ? body.source as DraftSource : 'system',
+    requestedBy: ['human', 'agent', 'organ'].includes(String(body.source)) ? body.source as DraftSource : 'system',
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
@@ -1262,7 +1208,7 @@ function buildRoutePreview(draft: MissionDraft): RoutePreview {
       warnings,
     },
     operationDraft: {
-      schema_version: 'plinyos.t3mp3st_operation/v1',
+      schema_version: 't3mp3st.operation/v1',
       operation_id: `op-${draft.id.replace(/^draft_/, '')}`,
       mission_id: draft.id,
       family,
@@ -1373,7 +1319,7 @@ function buildMissionBundle(params: { draft?: MissionDraft; operationDraft?: Rec
   const pressurePaths = buildPressurePaths({ missionId, operationId, family, operationDraft, reproPacks });
 
   return redactSecrets({
-    schema_version: 'plinyos.t3mp3st_mission_bundle/v1',
+    schema_version: 't3mp3st.mission_bundle/v1',
     generatedAt: nowIso(),
     family,
     missionId: missionId || null,
@@ -1539,7 +1485,7 @@ function buildMissionGate(operationDraft: Record<string, unknown>): Record<strin
   const readinessHold = Boolean(!hypotheses.length || !findings.length || openWorkOrders.length || findingsWithoutRetest.length || findingsWithoutStrongEvidence.length || unresolvedRetests.length);
   const status = blockCount ? 'blocked' : score >= 80 && freshMissionApprovals.length && !readinessHold ? 'ready' : 'hold';
   return {
-    schema_version: 'plinyos.t3mp3st_mission_gate/v1',
+    schema_version: 't3mp3st.mission_gate/v1',
     generatedAt: nowIso(),
     family,
     missionId: missionId || null,
@@ -1654,7 +1600,7 @@ function latestMissionContext(): Record<string, unknown> {
   const latest = records[0];
   if (!latest) {
     return {
-      schema_version: 'plinyos.t3mp3st_mission_context/v1',
+      schema_version: 't3mp3st.mission_context/v1',
       missionId: null,
       operationId: null,
       family: null,
@@ -1684,7 +1630,7 @@ function latestMissionContext(): Record<string, unknown> {
   const laneSummary = missionLaneSummary({ hypotheses, workOrders, findings, retests });
 
   return redactSecrets({
-    schema_version: 'plinyos.t3mp3st_mission_context/v1',
+    schema_version: 't3mp3st.mission_context/v1',
     missionId: missionId || null,
     operationId: operationId || null,
     family: latest.family || laneSummary[0]?.family || null,
@@ -2340,7 +2286,7 @@ async function buildSelfHealReport(params: Record<string, unknown>): Promise<Rec
   const health = blocks ? 'blocked' : actionCount ? 'repair' : watchCount ? 'watch' : 'ok';
 
   return redactSecrets({
-    schema_version: 'plinyos.t3mp3st_self_heal/v1',
+    schema_version: 't3mp3st.self_heal/v1',
     generatedAt: nowIso(),
     scope: {
       missionId: scope.missionId || null,
@@ -2466,7 +2412,7 @@ function buildEvidenceGraph(params: Record<string, unknown>): Record<string, unk
   const laneSummary = missionLaneSummary({ hypotheses, workOrders, findings, retests });
   const evidenceProvenance = summarizeEvidenceProvenance(evidence);
   return redactSecrets({
-    schema_version: 'plinyos.t3mp3st_evidence_graph/v1',
+    schema_version: 't3mp3st.evidence_graph/v1',
     generatedAt: nowIso(),
     scope: { missionId: missionId || null, operationId: operationId || null, family: family || null },
     summary: {
@@ -2647,7 +2593,7 @@ function buildReproPacks(params: Record<string, unknown>): Record<string, any> {
     }, {}),
   };
   return redactSecrets({
-    schema_version: 'plinyos.t3mp3st_repro_packs/v1',
+    schema_version: 't3mp3st.repro_packs/v1',
     generatedAt: nowIso(),
     scope: {
       missionId: missionId || null,
@@ -3031,7 +2977,7 @@ function buildPressurePaths(params: Record<string, unknown>): Record<string, any
     }, {}),
   };
   return redactSecrets({
-    schema_version: 'plinyos.t3mp3st_pressure_paths/v1',
+    schema_version: 't3mp3st.pressure_paths/v1',
     generatedAt: nowIso(),
     scope: {
       missionId: missionId || null,
@@ -3071,7 +3017,7 @@ function buildPressureCanary(params: Record<string, unknown>): Record<string, an
 
   if (!path) {
     return redactSecrets({
-      schema_version: 'plinyos.t3mp3st_pressure_canary/v1',
+      schema_version: 't3mp3st.pressure_canary/v1',
       generatedAt: now,
       status: 'no_path',
       canary: null,
@@ -3195,7 +3141,7 @@ function buildPressureCanary(params: Record<string, unknown>): Record<string, an
   });
 
   return redactSecrets({
-    schema_version: 'plinyos.t3mp3st_pressure_canary/v1',
+    schema_version: 't3mp3st.pressure_canary/v1',
     generatedAt: now,
     status,
     path: {
@@ -3236,7 +3182,7 @@ function buildPressureDuel(params: Record<string, unknown>): Record<string, any>
 
   if (!path) {
     return redactSecrets({
-      schema_version: 'plinyos.t3mp3st_pressure_duel/v1',
+      schema_version: 't3mp3st.pressure_duel/v1',
       generatedAt: now,
       status: 'no_path',
       survivabilityScore: 0,
@@ -3477,7 +3423,7 @@ function buildPressureDuel(params: Record<string, unknown>): Record<string, any>
   });
 
   return redactSecrets({
-    schema_version: 'plinyos.t3mp3st_pressure_duel/v1',
+    schema_version: 't3mp3st.pressure_duel/v1',
     generatedAt: now,
     status,
     survivabilityScore,
@@ -3519,7 +3465,7 @@ function buildPressureMutations(params: Record<string, unknown>): Record<string,
 
   if (!path) {
     return redactSecrets({
-      schema_version: 'plinyos.t3mp3st_pressure_mutations/v1',
+      schema_version: 't3mp3st.pressure_mutations/v1',
       generatedAt: now,
       status: 'no_path',
       summary: { total: 0, queued: 0, maxFangScore: 0 },
@@ -3739,7 +3685,7 @@ function buildPressureMutations(params: Record<string, unknown>): Record<string,
   });
 
   return redactSecrets({
-    schema_version: 'plinyos.t3mp3st_pressure_mutations/v1',
+    schema_version: 't3mp3st.pressure_mutations/v1',
     generatedAt: now,
     status: survivedDuel ? 'queued' : 'needs_duel',
     path: {
@@ -3783,7 +3729,7 @@ function buildPressureChains(params: Record<string, unknown>): Record<string, an
 
   if (!path) {
     return redactSecrets({
-      schema_version: 'plinyos.t3mp3st_pressure_chains/v1',
+      schema_version: 't3mp3st.pressure_chains/v1',
       generatedAt: now,
       status: 'no_path',
       summary: { total: 0, queued: 0, maxChainScore: 0, workOrders: 0 },
@@ -3804,7 +3750,7 @@ function buildPressureChains(params: Record<string, unknown>): Record<string, an
 
   if (!mutations.length) {
     return redactSecrets({
-      schema_version: 'plinyos.t3mp3st_pressure_chains/v1',
+      schema_version: 't3mp3st.pressure_chains/v1',
       generatedAt: now,
       status: 'no_mutations',
       path: {
@@ -4053,7 +3999,7 @@ function buildPressureChains(params: Record<string, unknown>): Record<string, an
   });
 
   return redactSecrets({
-    schema_version: 'plinyos.t3mp3st_pressure_chains/v1',
+    schema_version: 't3mp3st.pressure_chains/v1',
     generatedAt: now,
     status: summary.queued ? 'queued' : 'hold',
     path: {
@@ -4478,7 +4424,7 @@ async function buildArsenalStatus(family?: string): Promise<Record<string, unkno
   const installedCommandReady = commandReadyTools.filter(tool => tool.available).length;
   const missingCommandReady = commandReadyTools.filter(tool => !tool.available).map(tool => tool.id);
   return {
-    schema_version: 'plinyos.t3mp3st_arsenal_status/v1',
+    schema_version: 't3mp3st.arsenal_status/v1',
     family: normalizedFamily || 'all',
     summary: {
       ...summarizeToolCatalog(catalog),
@@ -4554,7 +4500,7 @@ function buildArsenalPlan(params: Record<string, unknown>): Record<string, unkno
       };
     });
   return {
-    schema_version: 'plinyos.t3mp3st_arsenal_plan/v1',
+    schema_version: 't3mp3st.arsenal_plan/v1',
     family,
     target,
     objective: typeof params.objective === 'string' ? params.objective : 'Build a scoped, evidence-first tool plan.',
@@ -4603,7 +4549,7 @@ function buildArsenalActivationPlan(): Record<string, unknown> {
     }
   }
   return {
-    schema_version: 'plinyos.t3mp3st_arsenal_activation/v1',
+    schema_version: 't3mp3st.arsenal_activation/v1',
     summary: {
       ...summarizeToolCatalog(),
       frontierMilestone: FRONTIER_ARSENAL_MILESTONE,
@@ -4717,7 +4663,7 @@ app.get('/api/arsenal/catalog', (req: Request, res: Response) => {
     .filter(adapter => !category || adapter.category === category)
     .filter(adapter => !execution || adapter.execution === execution);
   res.json({
-    schema_version: 'plinyos.t3mp3st_arsenal_catalog/v1',
+    schema_version: 't3mp3st.arsenal_catalog/v1',
     family: family || 'all',
     summary: summarizeToolCatalog(adapters),
     adapters,
@@ -4729,7 +4675,7 @@ app.get('/api/arsenal/catalog', (req: Request, res: Response) => {
 // defanged, transferable taxonomy the ai_red_team specialist (garak/promptfoo) reasons from.
 app.get('/api/ai-redteam/playbook', (_req: Request, res: Response) => {
   res.json({
-    schema_version: 'plinyos.t3mp3st_ai_redteam_playbook/v1',
+    schema_version: 't3mp3st.ai_redteam_playbook/v1',
     source: 'L1B3RT4S + P4RS3LT0NGV3 (public corpus) — defanged methodology, not payloads',
     doc: 'docs/AI_REDTEAM_TECHNIQUES.md',
     count: AI_REDTEAM_PLAYBOOK.length,
@@ -4750,6 +4696,32 @@ app.post('/api/arsenal/plan', (req: Request, res: Response) => {
 
 app.get('/api/arsenal/activation', (_req: Request, res: Response) => {
   res.json(buildArsenalActivationPlan());
+});
+
+// Capability-approval gate state (TOOL-level, distinct from the action-level /api/approvals
+// receipts): the tools approved this session + the full audit trail of gated decisions. Reads the
+// live mission's ApprovalController when one is running, else the headless pre-authorization
+// allowlist (T3MP3ST_APPROVED_TOOLS). Live decisions also stream over SSE as `arsenal.approval`.
+app.get('/api/arsenal/approvals', (_req: Request, res: Response) => {
+  const ctrl = tempestCommand?.approval ?? null;
+  const preAuthorized = (process.env.T3MP3ST_APPROVED_TOOLS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // redactSecrets: the audit's action strings can carry a credential a tool was invoked with — scrub
+  // it before serving (this REST path bypasses the SSE emitContractEvent redaction otherwise).
+  res.json(redactSecrets({
+    schema_version: 't3mp3st.arsenal_approvals/v1',
+    active: Boolean(ctrl),
+    gatedTiers: ['intrusive', 'credential', 'dangerous'],
+    spicyTiers: ['credential', 'dangerous'],
+    approvedTools: ctrl ? ctrl.approvedTools() : preAuthorized,
+    preAuthorized,
+    audit: ctrl ? ctrl.getAudit() : [],
+    note: ctrl
+      ? 'live approval state for the active mission'
+      : 'no active mission — showing the pre-authorization allowlist (T3MP3ST_APPROVED_TOOLS)',
+  }));
 });
 
 app.get('/api/approvals', (req: Request, res: Response) => {
@@ -4867,7 +4839,7 @@ app.get('/api/operator-runbooks/:family', (req: Request, res: Response) => {
 app.get('/api/forefront-radar', (req: Request, res: Response) => {
   const family = typeof req.query.family === 'string' ? req.query.family : '';
   res.json({
-    schema_version: 'plinyos.t3mp3st_forefront_radar/v1',
+    schema_version: 't3mp3st.forefront_radar/v1',
     lanes: forefrontPressureForFamily(family),
     mandate: {
       purpose: 'show what is possible early in controlled arenas, then convert offensive insight into defensive artifacts',
@@ -5191,7 +5163,7 @@ function handleHypothesisDecompose(req: Request, res: Response): void {
   const existing = [...workOrderLedger.values()].filter(order => order.hypothesisId === hypothesis.id);
   emitContractEvent('hypothesis.decomposed', { hypothesisId: hypothesis.id, created: orders.length, total: existing.length });
   res.status(201).json({
-    schema_version: 'plinyos.t3mp3st_work_order_decomposition/v1',
+    schema_version: 't3mp3st.work_order_decomposition/v1',
     hypothesis,
     created: orders,
     workOrders: existing.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
@@ -5304,7 +5276,7 @@ app.get('/api/watch-loop/status', (req: Request, res: Response) => {
   const cycles = latestWatchCycles(scope.missionId, scope.operationId, scope.family).slice(0, 10);
   const signals = cycles[0]?.signals || buildWatchSignals(scope);
   res.json({
-    schema_version: 'plinyos.t3mp3st_watch_loop_status/v1',
+    schema_version: 't3mp3st.watch_loop_status/v1',
     scope: {
       missionId: scope.missionId || null,
       operationId: scope.operationId || null,
@@ -5327,7 +5299,7 @@ app.get('/api/watch-loop/status', (req: Request, res: Response) => {
 app.post('/api/watch-loop/run', (req: Request, res: Response) => {
   const cycle = runWatchLoop(req.body as Record<string, unknown>);
   res.status(201).json({
-    schema_version: 'plinyos.t3mp3st_watch_loop_cycle/v1',
+    schema_version: 't3mp3st.watch_loop_cycle/v1',
     ...cycle,
   });
 });
@@ -5534,7 +5506,7 @@ app.post('/api/mission-drafts', (req: Request, res: Response) => {
     urgency: ['low', 'normal', 'high', 'critical'].includes(String(body.urgency)) ? body.urgency as MissionDraft['urgency'] : 'normal',
     opsecPreference: ['overt', 'normal', 'covert', 'ghost'].includes(String(body.opsecPreference)) ? body.opsecPreference as MissionDraft['opsecPreference'] : 'normal',
     mode: currentMode(),
-    source: ['human', 'agent', 'plinyos'].includes(String(body.source)) ? body.source as DraftSource : 'human',
+    source: ['human', 'agent', 'organ'].includes(String(body.source)) ? body.source as DraftSource : 'human',
     status: 'draft',
     createdAt: now,
     updatedAt: now,
@@ -5597,7 +5569,7 @@ app.post('/api/route-preview', (req: Request, res: Response) => {
     urgency: ['low', 'normal', 'high', 'critical'].includes(String(body.urgency)) ? body.urgency as MissionDraft['urgency'] : 'normal',
     opsecPreference: ['overt', 'normal', 'covert', 'ghost'].includes(String(body.opsecPreference)) ? body.opsecPreference as MissionDraft['opsecPreference'] : 'normal',
     mode: currentMode(),
-    source: ['human', 'agent', 'plinyos'].includes(String(body.source)) ? body.source as DraftSource : 'human',
+    source: ['human', 'agent', 'organ'].includes(String(body.source)) ? body.source as DraftSource : 'human',
     status: 'draft',
     createdAt: nowIso(),
     updatedAt: nowIso(),
@@ -5669,7 +5641,7 @@ app.post('/api/promotion/evaluate', (req: Request, res: Response) => {
 
 app.get('/api/learning/status', (_req: Request, res: Response) => {
   res.json({
-    schema_version: 'plinyos.t3mp3st_learning_status/v1',
+    schema_version: 't3mp3st.learning_status/v1',
     policy: {
       silentLearning: false,
       proposalRequired: true,
@@ -5712,14 +5684,14 @@ app.get('/api/learning/status', (_req: Request, res: Response) => {
 app.post('/api/learning/run-review', (req: Request, res: Response) => {
   const review = buildLearningReview(req.body as Record<string, unknown>);
   res.status(201).json({
-    schema_version: 'plinyos.t3mp3st_learning_review/v1',
+    schema_version: 't3mp3st.learning_review/v1',
     ...review,
   });
 });
 
 app.get('/api/memory/capsule', (_req: Request, res: Response) => {
   res.json({
-    schema_version: 'plinyos.t3mp3st_memory_capsule/v1',
+    schema_version: 't3mp3st.memory_capsule/v1',
     entries: [...memoryCapsule.values()],
     policy: 'accepted memory only; proposals are separate and inspectable',
   });
@@ -5728,7 +5700,7 @@ app.get('/api/memory/capsule', (_req: Request, res: Response) => {
 app.get('/api/memory/proposals', (req: Request, res: Response) => {
   const status = typeof req.query.status === 'string' ? req.query.status : '';
   res.json({
-    schema_version: 'plinyos.t3mp3st_memory_proposals/v1',
+    schema_version: 't3mp3st.memory_proposals/v1',
     proposals: [...memoryProposals.values()]
       .filter(proposal => !status || proposal.status === status)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),

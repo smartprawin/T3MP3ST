@@ -386,6 +386,11 @@ export interface Message {
 // TOOL TYPES
 // =============================================================================
 
+/** A tool's risk tier — the catalog's `risk` vocabulary. Drives the approval + spicy-warning gate
+ *  (see src/arsenal/approval.ts): intrusive/credential/dangerous require approval; credential/dangerous
+ *  additionally fire a loud warning. Absent/safe/active tools are ungated. */
+export type RiskTier = 'local_read' | 'passive' | 'active' | 'intrusive' | 'credential' | 'dangerous';
+
 export interface CustomTool {
   name: string;
   description: string;
@@ -393,6 +398,8 @@ export interface CustomTool {
   handler: (context: ToolContext) => Promise<ToolResult>;
   parameters?: ToolParameter[];
   requiredPermissions?: string[];
+  /** Risk tier carried from the catalog when the tool is a minted adapter — gates approval. */
+  riskTier?: RiskTier;
 }
 
 export interface ToolParameter {
@@ -541,6 +548,18 @@ export interface CommandEvents {
   'detection:triggered': DetectionEvent;
   'mission:phase_changed': { missionId: string; phase: KillChainPhase };
   'abort:recommended': string;
+  /** A capability-approval gate decision (allowed/denied) on an intrusive/dangerous tool — bridged to
+   *  the dashboard's live approval/audit feed. Structural match for arsenal/approval.ts ApprovalRecord. */
+  'approval:decision': {
+    tool: string;
+    risk: RiskTier;
+    operator?: string;
+    target?: string;
+    action: string;
+    outcome: string;
+    spicy: boolean;
+    at: number;
+  };
 }
 
 // =============================================================================
