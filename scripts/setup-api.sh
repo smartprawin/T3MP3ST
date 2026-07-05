@@ -1,18 +1,19 @@
 #!/bin/bash
 # T3MP3ST API Key Setup Script
 
+set -euo pipefail
+umask 077
+
 echo ""
 echo "╔═══════════════════════════════════════════════════════════╗"
 echo "║           T3MP3ST API KEY CONFIGURATION                   ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 echo ""
 
-# Check if .env exists
 ENV_FILE="$(dirname "$0")/../.env"
 
 if [ -f "$ENV_FILE" ]; then
-    echo "[*] Existing .env file found"
-    source "$ENV_FILE"
+    echo "[*] Existing .env file found; it will be replaced after you enter a new key."
 fi
 
 echo ""
@@ -22,35 +23,46 @@ echo "  2) Anthropic (Claude direct)"
 echo "  3) OpenAI (GPT models)"
 echo ""
 
-read -p "Enter choice [1-3]: " choice
+read -r -p "Enter choice [1-3]: " choice
 
 case $choice in
     1)
         echo ""
         echo "Get your OpenRouter API key at: https://openrouter.ai/keys"
-        read -p "Enter your OpenRouter API key: " api_key
-        echo "OPENROUTER_API_KEY=$api_key" > "$ENV_FILE"
-        echo "LLM_PROVIDER=openrouter" >> "$ENV_FILE"
+        read -rsp "Enter your OpenRouter API key: " api_key
+        echo ""
+        {
+            printf 'OPENROUTER_API_KEY=%s\n' "$api_key"
+            printf 'LLM_PROVIDER=openrouter\n'
+        } > "$ENV_FILE"
         ;;
     2)
         echo ""
         echo "Get your Anthropic API key at: https://console.anthropic.com/"
-        read -p "Enter your Anthropic API key: " api_key
-        echo "ANTHROPIC_API_KEY=$api_key" > "$ENV_FILE"
-        echo "LLM_PROVIDER=anthropic" >> "$ENV_FILE"
+        read -rsp "Enter your Anthropic API key: " api_key
+        echo ""
+        {
+            printf 'ANTHROPIC_API_KEY=%s\n' "$api_key"
+            printf 'LLM_PROVIDER=anthropic\n'
+        } > "$ENV_FILE"
         ;;
     3)
         echo ""
         echo "Get your OpenAI API key at: https://platform.openai.com/api-keys"
-        read -p "Enter your OpenAI API key: " api_key
-        echo "OPENAI_API_KEY=$api_key" > "$ENV_FILE"
-        echo "LLM_PROVIDER=openai" >> "$ENV_FILE"
+        read -rsp "Enter your OpenAI API key: " api_key
+        echo ""
+        {
+            printf 'OPENAI_API_KEY=%s\n' "$api_key"
+            printf 'LLM_PROVIDER=openai\n'
+        } > "$ENV_FILE"
         ;;
     *)
         echo "Invalid choice"
         exit 1
         ;;
 esac
+
+chmod 600 "$ENV_FILE"
 
 # Add .env to gitignore if not already there
 GITIGNORE="$(dirname "$0")/../.gitignore"
@@ -69,7 +81,7 @@ echo "╔═══════════════════════�
 echo "║              CONFIGURATION COMPLETE!                       ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 echo ""
-echo "Your API key has been saved to .env"
+echo "Your API key has been saved to .env (mode 600)"
 echo ""
 echo "Start the server with:"
 echo "  npm run server"
