@@ -1111,10 +1111,19 @@ function approvalMatchesGateScope(approval: ApprovalRequest, action: GuardAction
 }
 
 function findApproval(body: Record<string, unknown>, action: GuardAction, target: string): ApprovalRequest | null {
-  const id = typeof body.approvalId === 'string' ? body.approvalId : '';
-  const approval = id ? approvalRequests.get(id) : undefined;
-  if (!approval || !approvalIsFresh(approval) || !approvalMatches(approval, action, target)) return null;
-  return approval;
+  const ids = [
+    typeof body.approvalId === 'string' ? body.approvalId : '',
+    ...(Array.isArray(body.approvalIds) ? body.approvalIds.filter((id): id is string => typeof id === 'string') : []),
+  ].filter(Boolean);
+
+  for (const id of ids) {
+    const approval = approvalRequests.get(id);
+    if (approval && approvalIsFresh(approval) && approvalMatches(approval, action, target)) return approval;
+  }
+
+  return [...approvalRequests.values()]
+    .filter(approval => approvalIsFresh(approval) && approvalMatches(approval, action, target))
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0] || null;
 }
 
 function createApprovalRequest(action: GuardAction, target: string, reason: string, body: Record<string, unknown>): ApprovalRequest {
@@ -4825,6 +4834,52 @@ app.post('/api/approvals/:id/approve', (req: Request, res: Response) => {
   res.json(approval);
 });
 
+app.post('/api/approvals/authorize-target', (req: Request, res: Response) => {
+  const body = req.body as Record<string, unknown>;
+  const target = normalizeTargetValue(body.target);
+  if (!target) {
+    res.status(400).json({ error: 'target required' });
+    return;
+  }
+  if (target === '*') {
+    res.status(400).json({
+      error: 'Wildcard target authorization is not allowed for active actions',
+      next: 'Authorize one concrete host or URL so receipts remain target-scoped.',
+    });
+    return;
+  }
+
+  const requestedActions = Array.isArray(body.actions) ? body.actions.map(String) : [];
+  const allowedActions: GuardAction[] = ['mission_execution', 'network_request', 'command_execution', 'autonomous_execution'];
+  const actions = (requestedActions.length ? requestedActions : allowedActions)
+    .filter((action): action is GuardAction => allowedActions.includes(action as GuardAction));
+  if (!actions.length) {
+    res.status(400).json({ error: 'No supported approval actions requested' });
+    return;
+  }
+
+  const ttlMinutes = Number(body.ttlMinutes || process.env.T3MP3ST_APPROVAL_TTL_MINUTES || 240);
+  const expiresAt = new Date(Date.now() + Math.max(1, ttlMinutes) * 60_000).toISOString();
+  const approvals = actions.map((action) => {
+    const approval = createApprovalRequest(
+      action,
+      target,
+      typeof body.reason === 'string' && body.reason.trim()
+        ? body.reason.trim()
+        : `Authorize ${action} against ${target}`,
+      body
+    );
+    approval.status = 'approved';
+    approval.approvedBy = typeof body.approvedBy === 'string' ? body.approvedBy : 'local-operator';
+    approval.expiresAt = expiresAt;
+    approval.updatedAt = nowIso();
+    emitContractEvent('approval.approved', { approvalId: approval.id, action: approval.action, target: approval.target });
+    return approval;
+  });
+
+  res.status(201).json({ target, expiresAt, approvals });
+});
+
 app.post('/api/approvals/:id/reject', (req: Request, res: Response) => {
   const approval = approvalRequests.get(req.params.id);
   if (!approval) {
@@ -5999,6 +6054,14 @@ app.post('/api/mission/start', async (req: Request, res: Response): Promise<void
     const targetValue = normalizeTargetValue(target);
     const guard = guardAction(req.body as Record<string, unknown>, 'mission_execution', targetValue, `Start mission ${name} against ${targetValue}`);
     if (!guard.allowed) { blockForApproval(res, guard); return; }
+  }
+
+  if (provider === 'local-agent') {
+    const localAgent = await requireLiveLocalAgent(model);
+    if (!localAgent.ok) {
+      res.status(503).json({ error: localAgent.error });
+      return;
+    }
   }
 
   // B-03: if an OPTIONAL white-box repoPath was supplied, containment-check it HERE
