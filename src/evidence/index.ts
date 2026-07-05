@@ -65,6 +65,30 @@ export function cvssToSeverity(cvss: number): Severity {
   return 'info';
 }
 
+function cloneEvidence(evidence: Evidence): Evidence {
+  return {
+    ...evidence,
+    metadata: evidence.metadata ? { ...evidence.metadata } : undefined,
+  };
+}
+
+function cloneFinding(finding: Finding): Finding {
+  return {
+    ...finding,
+    cve: finding.cve ? [...finding.cve] : undefined,
+    cwe: finding.cwe ? [...finding.cwe] : undefined,
+    references: finding.references ? [...finding.references] : undefined,
+    evidence: Array.isArray(finding.evidence) ? finding.evidence.map(cloneEvidence) : [],
+    verifyGate: finding.verifyGate
+      ? { ...finding.verifyGate, reasons: [...finding.verifyGate.reasons] }
+      : undefined,
+  };
+}
+
+function hasPassedVerificationGate(finding: Finding): boolean {
+  return finding.verifiedAt !== undefined && finding.verifyGate?.passed === true;
+}
+
 // =============================================================================
 // EVIDENCE VAULT
 // =============================================================================
@@ -80,9 +104,10 @@ export class EvidenceVault extends EventEmitter<EvidenceVaultEvents> {
     if (!finding.id) {
       finding.id = randomUUID();
     }
-    this.findings.set(finding.id, finding);
-    this.emit('finding:added', finding);
-    return finding;
+    const stored = cloneFinding(finding);
+    this.findings.set(stored.id, stored);
+    this.emit('finding:added', cloneFinding(stored));
+    return cloneFinding(stored);
   }
 
   /**
@@ -91,10 +116,19 @@ export class EvidenceVault extends EventEmitter<EvidenceVaultEvents> {
   updateFinding(findingId: string, updates: Partial<Finding>): Finding | undefined {
     const finding = this.findings.get(findingId);
     if (finding) {
-      Object.assign(finding, updates);
-      this.emit('finding:updated', finding);
+      const sanitized: Partial<Finding> = { ...updates };
+      // Verification state is gate-owned. Callers may update finding metadata,
+      // evidence, remediation, etc., but cannot self-stamp a finding as verified.
+      delete sanitized.verifiedAt;
+      delete sanitized.verifyGate;
+      if (sanitized.evidence) sanitized.evidence = sanitized.evidence.map(cloneEvidence);
+      if (sanitized.cve) sanitized.cve = [...sanitized.cve];
+      if (sanitized.cwe) sanitized.cwe = [...sanitized.cwe];
+      if (sanitized.references) sanitized.references = [...sanitized.references];
+      Object.assign(finding, sanitized);
+      this.emit('finding:updated', cloneFinding(finding));
     }
-    return finding;
+    return finding ? cloneFinding(finding) : undefined;
   }
 
   /**
@@ -109,13 +143,13 @@ export class EvidenceVault extends EventEmitter<EvidenceVaultEvents> {
     finding.verifyGate = { passed: gate.passed, provenance: gate.provenance, reasons: gate.reasons, checkedAt: gate.checkedAt };
     if (gate.passed) {
       finding.verifiedAt = Date.now();
-      this.emit('finding:verified', finding);
+      this.emit('finding:verified', cloneFinding(finding));
     } else {
       // refuse to stamp verified on a finding the gate could not back
       delete finding.verifiedAt;
-      this.emit('finding:gate-blocked', finding);
+      this.emit('finding:gate-blocked', cloneFinding(finding));
     }
-    return finding;
+    return cloneFinding(finding);
   }
 
   /**
@@ -124,24 +158,26 @@ export class EvidenceVault extends EventEmitter<EvidenceVaultEvents> {
   addEvidence(findingId: string, evidence: Evidence): Finding | undefined {
     const finding = this.findings.get(findingId);
     if (finding) {
-      finding.evidence.push(evidence);
-      this.emit('evidence:added', { findingId, evidence });
+      const storedEvidence = cloneEvidence(evidence);
+      finding.evidence.push(storedEvidence);
+      this.emit('evidence:added', { findingId, evidence: cloneEvidence(storedEvidence) });
     }
-    return finding;
+    return finding ? cloneFinding(finding) : undefined;
   }
 
   /**
    * Get a finding by ID
    */
   getFinding(findingId: string): Finding | undefined {
-    return this.findings.get(findingId);
+    const finding = this.findings.get(findingId);
+    return finding ? cloneFinding(finding) : undefined;
   }
 
   /**
    * Get all findings
    */
   getAllFindings(): Finding[] {
-    return Array.from(this.findings.values());
+    return Array.from(this.findings.values()).map(cloneFinding);
   }
 
   /**
@@ -169,7 +205,7 @@ export class EvidenceVault extends EventEmitter<EvidenceVaultEvents> {
    * Get verified findings
    */
   getVerifiedFindings(): Finding[] {
-    return this.getAllFindings().filter(f => f.verifiedAt !== undefined);
+    return Array.from(this.findings.values()).filter(hasPassedVerificationGate).map(cloneFinding);
   }
 
   /**
@@ -235,7 +271,7 @@ export class EvidenceVault extends EventEmitter<EvidenceVaultEvents> {
     validatedCredentials: number;
     riskScore: number;
   } {
-    const findings = this.getAllFindings();
+    const findings = Array.from(this.findings.values());
     const credentials = this.getAllCredentials();
 
     const bySeverity: Record<Severity, number> = {
@@ -254,7 +290,7 @@ export class EvidenceVault extends EventEmitter<EvidenceVaultEvents> {
 
     return {
       totalFindings: findings.length,
-      verifiedFindings: findings.filter(f => f.verifiedAt !== undefined).length,
+      verifiedFindings: findings.filter(hasPassedVerificationGate).length,
       bySeverity,
       totalCredentials: credentials.length,
       validatedCredentials: credentials.filter(c => c.validatedAt !== undefined).length,
