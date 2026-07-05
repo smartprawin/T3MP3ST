@@ -224,7 +224,7 @@ export const AVAILABLE_MODELS: Record<LLMProvider, ModelInfo[]> = {
     },
     // Google (Dec 2025)
     {
-      id: 'google/gemini-3-pro-preview',
+      id: 'google/gemini-3.1-pro-preview',
       name: 'Gemini 3 Pro',
       provider: 'Google',
       contextWindow: 1000000,
