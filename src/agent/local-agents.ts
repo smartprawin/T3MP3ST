@@ -54,6 +54,16 @@ export function agentHome(): string {
 const expand = (p: string): string => (p.startsWith('~') ? agentHome() + p.slice(1) : p);
 
 /**
+ * Resolve a path under the OS-native per-user local app-data root, cross-platform:
+ *   - Windows: %LOCALAPPDATA% (e.g. C:\Users\<u>\AppData\Local), where the Hermes desktop app
+ *     stores its runtime — its .env / auth lives at %LOCALAPPDATA%\hermes\.env, NOT ~/.hermes/.env.
+ *   - POSIX:   <agentHome>/AppData/Local fallback (harmless: the artifact simply won't exist there).
+ * PRESENCE-ONLY: callers pass the result to existsSync(); contents are never read.
+ */
+const localAppData = (rel: string): string =>
+  join(process.env.LOCALAPPDATA || join(agentHome(), 'AppData', 'Local'), ...rel.split('/'));
+
+/**
  * Env for a spawned agent CLI. Two adjustments to our own env:
  *   - strip the injected provider keys so the CLI falls back to its OWN native login (not t3mp3st's).
  *   - point HOME (and USERPROFILE on Windows) at the agentHome() so the CLI finds that login even
@@ -137,7 +147,10 @@ const SPECS: AgentSpec[] = [
     invokeHint: 'hermes -z "<prompt>"  (--yolo only if T3MP3ST_HERMES_YOLO=1)',
     versionArgs: ['--version'],
     parseVersion: (o) => (o.match(/v([\d]+\.[\d]+(\.[\d]+)?)/)?.[1]) || (o.match(/[\d]+\.[\d]+(\.[\d]+)?/) || ['?'])[0],
-    authArtifacts: ['~/.hermes/.env', "~/.hermes/auth.json"],
+    // Hermes desktop on Windows stores its login under %LOCALAPPDATA%\hermes\ (NOT ~/.hermes/), so
+    // checking only ~/.hermes/ made an authed Windows install read as NOT AUTHED. Presence-only check;
+    // ~/.hermes/auth.json is upstream's POSIX/mac auth artifact, kept alongside the Windows paths.
+    authArtifacts: ['~/.hermes/.env', '~/.hermes/auth.json', localAppData('hermes/.env'), localAppData('hermes/auth.json')],
     oneShot: (p, m) => ['-z', p, ...(hermesYoloEnabled() ? ['--yolo'] : []), ...(m ? ['-m', m] : [])],
   },
 ];
@@ -172,12 +185,67 @@ export interface AgentDetection {
   ready: boolean;      // installed && authed
 }
 
-function resolvePath(bin: string): string | undefined {
+const isWindows = process.platform === 'win32';
+// Kept as a constructed RegExp (not a literal) so the source never embeds a raw CRLF inside a
+// regex literal — that repeatedly corrupted this file when edited by line-based patch tooling.
+const NEWLINE_RE = new RegExp('\\r?\\n');
+
+/**
+ * Windows npm-global CLIs install as shell shims (e.g. `claude.cmd`), NOT bare `.exe`. Node's
+ * execFile/spawn only auto-resolve `.exe` via PATHEXT, so `execFile('claude', …)` throws ENOENT
+ * even though `claude` runs fine in a shell — which made every npm-installed agent read as
+ * "binary not found on PATH". resolveBin() resolves the REAL absolute file path cross-platform:
+ *   - Windows: `where.exe` (honors PATHEXT), preferring .exe > .cmd > .bat > first hit.
+ *   - POSIX:   `command -v` then `which`.
+ * Detection and every spawn then use the resolved path, so a `.cmd` shim launches correctly
+ * (see needsShell). Returns undefined only when the bin is genuinely not on PATH.
+ */
+function resolveBin(bin: string): string | undefined {
+  if (isWindows) {
+    try {
+      const out = execFileSync('where.exe', [bin], { encoding: 'utf8', timeout: 5000 });
+      const hits = out.split(NEWLINE_RE).map((h) => h.trim()).filter(Boolean);
+      return (
+        hits.find((h) => /\.exe$/i.test(h)) ??
+        hits.find((h) => /\.cmd$/i.test(h)) ??
+        hits.find((h) => /\.bat$/i.test(h)) ??
+        hits[0]
+      );
+    } catch { return undefined; }
+  }
   try {
     return execFileSync('command', ['-v', bin], { shell: '/bin/bash', encoding: 'utf8' }).trim() || undefined;
   } catch {
     try { return execFileSync('which', [bin], { encoding: 'utf8' }).trim() || undefined; } catch { return undefined; }
   }
+}
+
+/**
+ * Windows-safe launcher for a resolved agent binary.
+ *
+ * A `.cmd`/`.bat` shim can't be spawned directly (shell:false throws EINVAL/ENOEXEC). The common
+ * "fix" — `spawn(bin, args, { shell: true })` — is UNSAFE here: runLocalAgent puts the (untrusted)
+ * prompt straight into argv (claude `-p <prompt>`, codex `exec … <prompt>`), and shell:true would
+ * route that prompt through cmd.exe where `&`, `|`, `>`, `%VAR%` become metacharacters → command
+ * injection in a security tool. Instead we invoke cmd.exe explicitly with an ARGV ARRAY
+ * (`cmd.exe /d /s /c <shim> <arg1> <arg2> …`) and shell:false. Node hands each element to the child
+ * as a distinct argv entry with no shell re-parsing, so cmd.exe resolves the `.cmd` association while
+ * the prompt is never interpreted. Real `.exe`/POSIX binaries spawn directly (no wrapper).
+ */
+function spawnAgent(resolvedBin: string, args: string[], options: import('child_process').SpawnOptions): import('child_process').ChildProcess {
+  if (needsShell(resolvedBin)) {
+    return spawn('cmd.exe', ['/d', '/s', '/c', resolvedBin, ...args], { ...options, shell: false });
+  }
+  return spawn(resolvedBin, args, { ...options, shell: false });
+}
+
+/**
+ * True when the resolved binary is a Windows `.cmd`/`.bat` shim (npm global installs land as these).
+ * Such a shim can't be spawned directly — it must go through cmd.exe (see spawnAgent, which does so
+ * SAFELY via an argv array rather than shell:true). `.exe` and POSIX binaries return false.
+ */
+function needsShell(resolvedBin: string): boolean {
+  return isWindows && /\.(cmd|bat)$/i.test(resolvedBin);
 }
 
 function authState(spec: AgentSpec): { authed: boolean; method?: string } {
@@ -198,8 +266,15 @@ function detectOne(spec: AgentSpec): Promise<AgentDetection> {
     id: spec.id, label: spec.label, vendor: spec.vendor, bin: spec.bin,
     blurb: spec.blurb, invokeHint: spec.invokeHint,
   };
+  const resolved = resolveBin(spec.bin);
   return new Promise((resolve) => {
-    execFile(spec.bin, spec.versionArgs, { timeout: 8000 }, (err, stdout) => {
+    // Not on PATH at all → genuinely not installed.
+    if (!resolved) {
+      resolve({ ...base, installed: false, authed: false, ready: false });
+      return;
+    }
+    // Launch the RESOLVED path (a .cmd shim needs a shell; a real .exe does not).
+    execFile(resolved, spec.versionArgs, { timeout: 8000, shell: needsShell(resolved) }, (err, stdout) => {
       if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
         resolve({ ...base, installed: false, authed: false, ready: false });
         return;
@@ -210,7 +285,7 @@ function detectOne(spec: AgentSpec): Promise<AgentDetection> {
       resolve({
         ...base,
         installed: true,
-        path: resolvePath(spec.bin),
+        path: resolved,
         version,
         authed: auth.authed,
         authMethod: auth.method,
@@ -265,9 +340,12 @@ export function runLocalAgent(
   const maxChars = opts.maxChars ?? 4000;
   // child env: provider keys stripped + HOME pinned to the real agent home (see childEnv).
   const env = childEnv();
+  // Resolve the real binary path so a Windows .cmd shim launches (fallback to bare name on POSIX).
+  const resolvedBin = resolveBin(spec.bin) || spec.bin;
   return new Promise((resolve) => {
     // stdin:'ignore' so the agent doesn't stall waiting on piped input (e.g. `claude -p`'s 3s stdin wait).
-    const child = spawn(spec.bin, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    // spawnAgent() launches a Windows .cmd shim SAFELY (cmd.exe argv array, no shell re-parsing of the prompt).
+    const child = spawnAgent(resolvedBin, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let errOut = '';
     let done = false;
@@ -329,8 +407,12 @@ export function localAgentChat(id: string, prompt: string, opts: { model?: strin
   }
 
   const cleanup = () => { if (workDir) { try { rmSync(workDir, { recursive: true, force: true }); } catch { /* noop */ } } };
+  // Resolve the real binary path (Windows .cmd shim vs real .exe). hermes resolves to hermes.exe,
+  // so needsShell is false there — its prompt arg never traverses a shell. See needsShell note.
+  const resolvedBin = resolveBin(spec.bin) || spec.bin;
   return new Promise((resolve, reject) => {
-    const child = spawn(spec.bin, args, { env, stdio: [viaStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+    // spawnAgent() launches a Windows .cmd shim SAFELY (cmd.exe argv array, no shell re-parsing).
+    const child = spawnAgent(resolvedBin, args, { env, stdio: [viaStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
     let out = '';
     let errOut = '';
     let done = false;
