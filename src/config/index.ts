@@ -452,9 +452,10 @@ class ConfigManager {
   private loadEnvVariables(): void {
     if (this.envLoaded) return;
 
-    // Try to load from .env file in current directory or home
+    // Load only T3MP3ST-owned/home env files. Do NOT read process.cwd()/.env:
+    // operators often run T3MP3ST inside target repos, and importing that repo's
+    // secrets would contaminate this process with unrelated credentials.
     const envPaths = [
-      join(process.cwd(), '.env'),
       join(homedir(), '.t3mp3st', '.env'),
       join(homedir(), '.env'),
     ];
@@ -482,23 +483,9 @@ class ConfigManager {
       }
     }
 
-    // Check environment variables for API keys
-    const envKeys = {
-      openrouter: process.env.OPENROUTER_API_KEY,
-      venice: process.env.VENICE_API_KEY,
-      anthropic: process.env.ANTHROPIC_API_KEY,
-      openai: process.env.OPENAI_API_KEY,
-    };
-
-    // Only set from env if not already set in config
-    const currentKeys = this.config.get('apiKeys');
-
-    for (const [provider, envKey] of Object.entries(envKeys)) {
-      if (envKey && !currentKeys[provider as keyof typeof currentKeys]) {
-        this.setApiKey(provider as 'openrouter' | 'venice' | 'anthropic' | 'openai', envKey);
-      }
-    }
-
+    // Environment variables (including values loaded from ~/.t3mp3st/.env above)
+    // are intentionally process-local. getApiKey() already gives env vars highest
+    // priority, so do not persist them into Conf's apiKeys store as a side effect.
     this.envLoaded = true;
   }
 
