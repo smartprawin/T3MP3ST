@@ -401,12 +401,23 @@ export const AVAILABLE_MODELS: Record<LLMProvider, ModelInfo[]> = {
       capabilities: ['testing'],
     },
   ],
+  // Model IDs verified against xAI's published model list (docs.x.ai/docs/models, 2026-07-05):
+  // grok-build-0.1 = coding model (256K ctx); grok-4.3 = general (1M ctx). Any current xAI
+  // model id can be passed via config/CLI/model arg — these are just the curated defaults.
   xai: [
     {
       id: 'grok-build-0.1',
       name: 'Grok Build (grok-build-0.1, 256K)',
       provider: 'xAI',
       contextWindow: 256000,
+      maxOutput: 8192,
+      capabilities: ['reasoning', 'code', 'analysis', 'agents', 'tools'],
+    },
+    {
+      id: 'grok-4.3',
+      name: 'Grok 4.3 (general, 1M)',
+      provider: 'xAI',
+      contextWindow: 1000000,
       maxOutput: 8192,
       capabilities: ['reasoning', 'code', 'analysis', 'agents', 'tools'],
     },
