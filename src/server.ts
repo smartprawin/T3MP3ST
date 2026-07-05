@@ -1104,6 +1104,15 @@ function ensureExecTargetsWithinApprovedTarget(targets: string[], approvedTarget
     .filter(target => hostFromTarget(target) !== approvedHost);
 }
 
+function ensureExecTargetsAuthorized(
+  targets: string[],
+  approvedTarget: string,
+  body: Record<string, unknown>,
+): string[] {
+  return ensureExecTargetsWithinApprovedTarget(targets, approvedTarget)
+    .filter(target => !findApproval(body, 'autonomous_execution', target));
+}
+
 function approvalMatchesGateScope(approval: ApprovalRequest, action: GuardAction, operationId: string, target: string): boolean {
   if (!approvalMatches(approval, action, target)) return false;
   if (approval.operationId && operationId && approval.operationId !== operationId) return false;
@@ -7326,12 +7335,20 @@ app.post('/api/admiral/launch', async (req: Request, res: Response): Promise<voi
       res.status(409).json({ error: 'General plan gate is HOLD', mode: 'live', plan, review: execConfig.review });
       return;
     }
-    const outOfScopeTargets = ensureExecTargetsWithinApprovedTarget(execConfig.targets, brief.target);
+    const outOfScopeTargets = ensureExecTargetsAuthorized(execConfig.targets, brief.target, req.body as Record<string, unknown>);
     if (outOfScopeTargets.length) {
+      const approvals = outOfScopeTargets.map(target => createApprovalRequest(
+        'autonomous_execution',
+        target,
+        `Admiral plan expanded execution scope from ${brief.target} to ${target}`,
+        req.body as Record<string, unknown>
+      ));
       res.status(403).json({
-        error: 'Admiral LIVE plan contains targets outside the approved brief target',
+        error: 'Admiral LIVE plan needs approval for expanded target scope',
         approvedTarget: brief.target,
         outOfScopeTargets,
+        approvals,
+        next: 'Approve the expanded target receipts, then retry /api/admiral/launch with approvalIds.',
       });
       return;
     }

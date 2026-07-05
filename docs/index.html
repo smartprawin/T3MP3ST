@@ -25169,6 +25169,19 @@ Be specific and actionable. Format as structured JSON.`;
           throw new Error('Approval required for ' + tgt + ' — choose Autonomous mode, or approve in the receipts panel.');
         }
       }
+      if (res.status === 403 && Array.isArray(d.approvals) && d.approvals.length) {
+        const approvalIds = d.approvals.map(function(a){ return a && a.id; }).filter(Boolean);
+        const targets = (d.outOfScopeTargets || []).join(', ');
+        if (isLab || autonomous) {
+          await Promise.all(approvalIds.map(function(id){
+            return fetch('/api/approvals/' + id + '/approve', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
+          }));
+          res = await fetch('/api/admiral/launch', launchOpts({ approvalIds: approvalIds }));
+          d = await res.json();
+        } else {
+          throw new Error('Expanded target approval required for ' + (targets || 'planner-added targets') + ' — approve the receipts or choose Autonomous mode.');
+        }
+      }
       if (res.status === 409 && d.review && d.review.status === 'hold') throw new Error('Op Admiral plan gate is HOLD — ' + ((d.review && d.review.reason) || 'manual review required before execution'));
       if (!res.ok || d.error) throw new Error(d.error || ('launch failed (' + res.status + ')'));
       const nOps = (d.operators || []).length;

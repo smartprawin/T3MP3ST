@@ -33,9 +33,10 @@ describe('local API authorization hardening invariants', () => {
   it('Admiral live launch re-checks every General-produced execution target before mission bring-up', () => {
     const route = routeBlock("app.post('/api/admiral/launch'", '// =============================================================================\n// BOUNTY PLATFORM INTEGRATIONS');
 
-    expect(route).toMatch(/ensureExecTargetsWithinApprovedTarget\(execConfig\.targets, brief\.target\)/);
+    expect(route).toMatch(/ensureExecTargetsAuthorized\(execConfig\.targets,\s*brief\.target,\s*req\.body/);
     expect(route).toMatch(/outOfScopeTargets\.length/);
-    expect(route.indexOf('ensureExecTargetsWithinApprovedTarget(execConfig.targets, brief.target)'))
+    expect(route.indexOf('ensureExecTargetsAuthorized(execConfig.targets, brief.target'))
       .toBeLessThan(route.indexOf('bringUpMissionFromPlan(execConfig, generalConfig)'));
+    expect(route).toMatch(/approvals/);
   });
 });
