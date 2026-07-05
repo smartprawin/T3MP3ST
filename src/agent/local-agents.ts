@@ -71,6 +71,19 @@ function childEnv(): NodeJS.ProcessEnv {
 
 export type LocalAgentId = 'claude' | 'codex' | 'hermes';
 
+/** Apply an authoritative bulk selection; single-agent connects remain additive. */
+export function syncLocalAgentSelection<T>(
+  connected: Map<string, T>,
+  selectedIds: string[],
+  replace: boolean,
+): void {
+  if (!replace) return;
+  const selected = new Set(selectedIds);
+  for (const id of connected.keys()) {
+    if (!selected.has(id)) connected.delete(id);
+  }
+}
+
 interface AgentSpec {
   id: LocalAgentId;
   label: string;
