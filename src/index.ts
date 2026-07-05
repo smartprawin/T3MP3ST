@@ -10,7 +10,7 @@
  *
  * const tempest = createTempest({
  *   name: 'Operation Midnight',
- *   llm: { provider: 'openrouter', model: 'anthropic/claude-opus-4-6' },
+ *   llm: { provider: 'openrouter', model: 'anthropic/claude-opus-4-8' },
  *   opsec: { level: 'covert' },
  * });
  *
@@ -217,7 +217,9 @@ import type {
 export { KillChainPhase } from './types/index.js';
 export type { OpsecConfig, Finding, Credential, Target, DetectionEvent } from './types/index.js';
 
-import { OperatorCell, OperatorAgent, ARCHETYPE_PROFILES } from './operators/index.js';
+import { OperatorCell, OperatorAgent, ARCHETYPE_PROFILES, PHASE_ARCHETYPES, KILL_CHAIN_ORDER } from './operators/index.js';
+import { PackBoard } from './pack/board.js';
+import { randomUUID } from 'node:crypto';
 import { MissionControl, TaskQueue } from './mission/index.js';
 import { TargetEnvironment } from './target/index.js';
 import { EvidenceVault } from './evidence/index.js';
@@ -328,6 +330,27 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
    * alongside its task. Empty/unset = black-box operation (unchanged behavior).
    */
   private whiteboxSource: string = '';
+
+  /**
+   * The swarm's shared, verifiable blackboard (Phase-2 coordination). One board per mission run:
+   * every finding posts a lead here, carrying its tool-vs-model-asserted provenance — the verifiable
+   * feedback signal that will drive the refinement loop (findings → targeted follow-up tasks).
+   */
+  private readonly packBoard = new PackBoard();
+
+  /**
+   * Swarm coordination (Phase-2), OPT-IN so the swarm-vs-single-agent bake-off can toggle it: set
+   * `T3MP3ST_SWARM_COORD=on` to enable the finding→follow-up refinement loop. Off = the legacy
+   * phase-sequenced queue (the single-agent-equivalent baseline). Default OFF until it's proven.
+   */
+  private readonly coordinationEnabled = /^(1|true|on)$/i.test(process.env.T3MP3ST_SWARM_COORD ?? '');
+  /** Findings that already spawned a follow-up (dedup — a finding chases exactly once). */
+  private readonly spawnedFollowups = new Set<string>();
+  /** Per-run cap on follow-up tasks so the refinement loop can never explode. */
+  private readonly maxFollowups = Number(process.env.T3MP3ST_SWARM_MAX_FOLLOWUPS) || 24;
+  /** Coordination telemetry — the artifact that distinguishes a coordinated run from N solo agents. */
+  private leadsPosted = 0;
+  private followupsSpawned = 0;
 
   constructor(config: TempestConfig) {
     super();
@@ -518,6 +541,61 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
 
       // Sync finding intelligence back to the target object
       this.syncFindingToTarget(finding);
+
+      // Post the finding to the shared board as a lead — the swarm's verifiable blackboard.
+      // `provenance` carries the tool-vs-model-asserted signal (the refinement loop's feedback);
+      // dedup + provenance-endorsement are the board's job. Best-effort: never break the mission.
+      // Gated on coordination so the baseline (coordination off) leaves the board fully inert.
+      if (this.coordinationEnabled) try {
+        const prov = finding.verifyGate?.provenance ?? 'none';
+        this.packBoard.postLead(operator.id, {
+          kind: 'lead',
+          title: finding.title,
+          where: { targetId: finding.id },
+          vulnClass: finding.cwe?.[0] ?? 'unclassified',
+          confidence: prov === 'tool' ? 'high' : prov === 'context' ? 'medium' : 'low',
+          provenance: prov,
+          cwe: finding.cwe?.[0],
+          severity: finding.severity,
+        });
+        this.leadsPosted++;
+      } catch { /* best-effort */ }
+
+      // [Phase-2 refinement loop] A TOOL-VERIFIED finding spawns a targeted follow-up task for the
+      // NEXT kill-chain phase's operator — chase the verifiable feedback signal (the research's
+      // load-bearing condition). Model-asserted findings spawn NO work (no chasing hallucinations).
+      // Dedup + a per-run cap keep the loop bounded. Gated by T3MP3ST_SWARM_COORD for the bake-off.
+      if (
+        this.coordinationEnabled &&
+        finding.verifyGate?.provenance === 'tool' &&
+        !this.spawnedFollowups.has(finding.id) &&
+        this.spawnedFollowups.size < this.maxFollowups
+      ) {
+        const mission = this.mission.getActiveMission();
+        const queue = this.mission.getTaskQueue();
+        const idx = KILL_CHAIN_ORDER.indexOf(finding.phase);
+        const nextPhase = idx >= 0 && idx < KILL_CHAIN_ORDER.length - 1 ? KILL_CHAIN_ORDER[idx + 1] : undefined;
+        const nextOp = nextPhase ? PHASE_ARCHETYPES[nextPhase]?.[0] : undefined;
+        if (mission && queue && nextPhase && nextOp) {
+          this.spawnedFollowups.add(finding.id);
+          const cwe = finding.cwe?.length ? `, ${finding.cwe.join('/')}` : '';
+          queue.add({
+            id: randomUUID(),
+            missionId: mission.id,
+            name: `Chase: ${finding.title}`.slice(0, 120),
+            description:
+              `A prior operator TOOL-VERIFIED this lead: "${finding.title}" (${finding.severity}${cwe}) on ${finding.targetId}. ` +
+              `${finding.description} Focus this ${nextPhase} step on THIS specific surface — confirm and advance it; do not re-scan broadly.`,
+            phase: nextPhase,
+            operatorType: nextOp,
+            status: 'pending',
+            priority: 20,
+            dependencies: [],
+            createdAt: Date.now(),
+          });
+          this.followupsSpawned++;
+        }
+      }
     });
 
     operator.on('credential:harvested', ({ credential }) => {
@@ -1060,6 +1138,9 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
       tools: profile.defaultTools,
     });
     operator.attachArsenal(this.arsenal, agentLoop);
+    // [Phase-2] Give the operator the shared board ONLY when swarm coordination is on — so the
+    // baseline (coordination off) keeps the solo-operator prompt with zero shared context.
+    if (this.coordinationEnabled) operator.attachBoard(this.packBoard);
 
     // If a white-box source was already set (repo ingested before this operator
     // spawned), hand it to the new operator so it also sees the source excerpt.
@@ -1084,6 +1165,21 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     for (const operator of this.cell.getAllOperators()) {
       operator.setWhiteboxSource(sourceContext);
     }
+  }
+
+  /**
+   * Coordination telemetry — the machine-readable artifact that distinguishes a coordinated swarm
+   * run from N independent agents: how many findings became shared leads, how many spawned targeted
+   * follow-up work, and how many distinct findings were chased. Zero across the board (with
+   * `enabled:false`) is the single-agent-equivalent baseline.
+   */
+  public getCoordinationStats(): { enabled: boolean; leadsPosted: number; followupsSpawned: number; uniqueFindingsChased: number } {
+    return {
+      enabled: this.coordinationEnabled,
+      leadsPosted: this.leadsPosted,
+      followupsSpawned: this.followupsSpawned,
+      uniqueFindingsChased: this.spawnedFollowups.size,
+    };
   }
 
   /**

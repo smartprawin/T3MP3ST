@@ -3078,6 +3078,30 @@ export async function runSubprocess(
  * External CLI tools that wrap real security tools when available.
  * These gracefully degrade — if the tool isn't installed, they return a helpful message.
  */
+// LLM-supplied `flags` for shell-out tools are ATTACKER-INFLUENCED: word-splitting them into argv is
+// flag injection that reads/writes the OPERATOR's own machine (curl -o/-K/-T/-x/--config, nmap
+// -oN/--script/-iL). This sanitizer drops the file-write/read/config/script flags (and their values);
+// curl bodies are separately forced through --data-raw with an explicit @/< reject. Mirrors the
+// hardened templates in adapter-tools.ts; fail-closed on the known-dangerous vectors.
+const DANGEROUS_EXTERNAL_FLAGS: Record<string, RegExp> = {
+  curl: /^(-o|-O|--output|--remote-name|-K|--config|-T|--upload-file|-x|--proxy|--preproxy|-D|--dump-header|--trace|--trace-ascii|-w|--write-out|--cert|--key|--cacert|--capath|--cert-type|--key-type|--output-dir|--create-dirs|-c|--cookie-jar)$/i,
+  nmap: /^(-o[NXGAS]|--script|--script-args|--script-args-file|--script-help|--script-updatedb|-iL|--excludefile|--datadir|--servicedb|--versiondb|--resume|--stylesheet|--webxml)$/i,
+};
+function sanitizeExternalFlags(tool: 'curl' | 'nmap', raw?: string): string[] {
+  const bad = DANGEROUS_EXTERNAL_FLAGS[tool];
+  const toks = (raw || '').split(/\s+/).filter(Boolean);
+  const out: string[] = [];
+  for (let i = 0; i < toks.length; i++) {
+    const name = toks[i].split('=')[0];
+    if (bad.test(name)) {
+      if (!toks[i].includes('=') && toks[i + 1] && !toks[i + 1].startsWith('-')) i++; // also drop the flag's value token
+      continue;
+    }
+    out.push(toks[i]);
+  }
+  return out;
+}
+
 export const EXTERNAL_TOOLS: CustomTool[] = [
   {
     name: 'nmap_scan',
@@ -3093,7 +3117,7 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
         return { success: false, error: 'nmap is not installed. Install it with: apt install nmap' };
       }
       const target = context.parameters.target as string;
-      const flags = (context.parameters.flags as string || '-sV -T4').split(/\s+/);
+      const flags = sanitizeExternalFlags('nmap', context.parameters.flags as string || '-sV -T4'); // drop -oN/--script/-iL injection
       const ports = context.parameters.ports as string | undefined;
 
       const args = [...flags];
@@ -3225,13 +3249,18 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
       const flags = context.parameters.flags as string | undefined;
 
       const args = ['-s', '-i', '-X', method];
-      if (data) args.push('-d', data);
+      if (data) {
+        // A body starting with @ (read local file) or < (read stdin) turns curl into a local-file
+        // disclosure primitive. --data-raw sends it verbatim and disables @/< interpretation.
+        if (/^[@<]/.test(data)) return { success: false, error: `curl_request: refusing a data value starting with '${data[0]}' (would read a local file/stdin)` };
+        args.push('--data-raw', data);
+      }
       if (headers) {
         for (const h of headers.split(',')) {
           args.push('-H', h.trim());
         }
       }
-      if (flags) args.push(...flags.split(/\s+/));
+      if (flags) args.push(...sanitizeExternalFlags('curl', flags)); // drop -o/-K/-T/-x file-read/write injection
       args.push(url);
 
       const result = await runSubprocess('curl', args, { timeout: 30000 });
