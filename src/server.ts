@@ -22,7 +22,7 @@ import { LLMBackbone } from './llm/index.js';
 import { TempestCommand } from './index.js';
 import { OpGeneral } from './general/index.js';
 import type { Directive } from './general/index.js';
-import { detectLocalAgents, pingLocalAgent, runLocalAgent } from './agent/local-agents.js';
+import { detectLocalAgents, pingLocalAgent, runLocalAgent, syncLocalAgentSelection } from './agent/local-agents.js';
 import { FRONTIER_ARSENAL_MILESTONE, NETWORK_COMMANDS, SAFE_COMMANDS, TOOL_ADAPTERS, adapterForBinary, adaptersForFamily, summarizeToolCatalog } from './arsenal/catalog.js';
 import { AGENT_PROMPT_PACKS, FOREFRONT_PRESSURE_LANES, OPERATOR_RUNBOOKS, RESOURCE_PACKS, WORKFLOW_PRESETS, forefrontPressureForFamily, promptPacksForFamily, resourcesForFamily, runbookForFamily, searchResources, workflowPresetsForFamily } from './resources/index.js';
 import { AI_REDTEAM_PLAYBOOK, AI_REDTEAM_TECHNIQUE_IDS, aiRedTeamBriefing } from './resources/ai-redteam-playbook.js';
@@ -7363,12 +7363,13 @@ app.get('/api/agents/local/detect', async (_req: Request, res: Response): Promis
   }
 });
 
-// POST /api/agents/local/connect { ids:[...] | id, ping?:bool } — enlist one or many; optional round-trip
+// POST /api/agents/local/connect { ids:[...] | id, ping?:bool, replace?:bool } — enlist one or many; optional round-trip
 app.post('/api/agents/local/connect', async (req: Request, res: Response): Promise<void> => {
   const body = req.body || {};
   const ids: string[] = Array.isArray(body.ids) ? body.ids : (body.id ? [body.id] : []);
   const doPing: boolean = body.ping === true;
-  if (!ids.length) { res.status(400).json({ error: 'provide ids:[] or id' }); return; }
+  const replace: boolean = body.replace === true;
+  if (!ids.length && !replace) { res.status(400).json({ error: 'provide ids:[] or id' }); return; }
   const detected = await detectLocalAgents();
   const results: Array<Record<string, unknown>> = [];
   for (const id of ids) {
@@ -7380,6 +7381,7 @@ app.post('/api/agents/local/connect', async (req: Request, res: Response): Promi
     connectedLocalAgents.set(id, { id, label: d.label, version: d.version, connectedAt: Date.now(), lastPing: ping });
     results.push({ id, status: 'active', label: d.label, version: d.version, authMethod: d.authMethod, ping });
   }
+  syncLocalAgentSelection(connectedLocalAgents, ids, replace);
   res.json({ results, connected: Array.from(connectedLocalAgents.values()) });
 });
 

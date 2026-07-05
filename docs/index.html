@@ -24825,14 +24825,14 @@ Be specific and actionable. Format as structured JSON.`;
     }
   };
 
-  async function connect(ids) {
-    if (!ids.length) { if(window.toast) toast('Tick at least one ready agent first','warning'); return; }
+  async function connect(ids, replaceSelection) {
+    if (!ids.length && !replaceSelection) { if(window.toast) toast('Tick at least one ready agent first','warning'); return; }
     const deep = (document.getElementById('localAgentsDeepPing')||{}).checked;
     const btn = document.getElementById('localAgentsConnectAllBtn');
     const orig = btn ? btn.innerHTML : '';
     if (btn) { btn.disabled=true; btn.innerHTML='⚡ Connecting…'; btn.style.opacity='0.7'; }
     try {
-      const data = await api('/api/agents/local/connect', { ids: ids, ping: !!deep });
+      const data = await api('/api/agents/local/connect', { ids: ids, ping: !!deep, replace: !!replaceSelection });
       (data.results||[]).forEach(function(r){ if (r.ping) pingStatus[r.id] = { ok:r.ping.ok, latencyMs:r.ping.latencyMs, error:r.ping.error }; });
       render(lastDetected, (data.connected||[]).map(function(c){return c.id;}));
       persistConnected(connectedIds); // remember for silent auto-reconnect after refresh
@@ -24855,7 +24855,7 @@ Be specific and actionable. Format as structured JSON.`;
 
   window.connectSelectedLocalAgents = function() {
     const ids = Array.prototype.slice.call(document.querySelectorAll('.la-sel:checked')).map(function(c){return c.dataset.id;});
-    connect(ids);
+    connect(ids, true);
   };
   window.connectOneLocalAgent = function(id) { connect([id]); };
 
