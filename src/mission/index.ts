@@ -114,7 +114,9 @@ export class TaskQueue extends EventEmitter<TaskQueueEvents> {
    * Get all pending tasks
    */
   getPending(): Task[] {
-    return this.tasks.filter(t => t.status === 'pending');
+    // Priority-ordered (desc): tool-verified follow-up tasks carry a higher priority than the static
+    // seed tasks, so the swarm chases its hottest verified leads first — light orchestration.
+    return this.tasks.filter(t => t.status === 'pending').sort((a, b) => b.priority - a.priority);
   }
 
   /**

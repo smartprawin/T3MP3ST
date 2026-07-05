@@ -7,6 +7,7 @@
 
 import { EventEmitter } from 'eventemitter3';
 import { randomUUID } from 'crypto';
+import type { PackBoard } from '../pack/board.js';
 import {
   KillChainPhase,
   type OperatorArchetype,
@@ -270,6 +271,8 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
   private _state: OperatorState;
   private llm?: LLMBackbone;
   private agentLoop?: AgentLoop;
+  /** Shared pack board (Phase-2). Attached only when swarm coordination is on; absent = solo baseline. */
+  private board?: PackBoard;
   private cooldownTimer: NodeJS.Timeout | null = null;
   private findings: Finding[] = [];
   private credentials: Credential[] = [];
@@ -406,6 +409,11 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
     this.agentLoop = agentLoop;
   }
 
+  /** Attach the shared pack board so this operator sees the swarm's live lead-board (Phase-2). */
+  attachBoard(board: PackBoard): void {
+    this.board = board;
+  }
+
   /**
    * Execute a task with an optional target context
    */
@@ -414,7 +422,11 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
     // Pass the white-box source excerpt (if any) so the model sees the target's
     // real source alongside the task; empty string keeps black-box behavior.
     if (this.agentLoop && this.llm) {
-      const result = await this.agentLoop.run(task, this.profile.systemPrompt, target, this.whiteboxSource);
+      // [Phase-2] Register as live on the board and pull the shared situation report so this
+      // operator sees teammates' verified leads/claims — it builds on them instead of running blind.
+      this.board?.heartbeat(this.id, 'hunting', task.name);
+      const sharedContext = this.board?.situationReport(this.id);
+      const result = await this.agentLoop.run(task, this.profile.systemPrompt, target, this.whiteboxSource, sharedContext);
 
       // Convert agent findings to operator findings.
       // PROVENANCE-HONEST: only a tool-backed finding gets tool-output evidence (the raw

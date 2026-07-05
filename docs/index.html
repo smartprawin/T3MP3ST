@@ -5542,7 +5542,26 @@
    ██║    ╚═══██╗██║╚██╔╝██║██╔═══╝  ╚═══██╗╚════██║   ██║
    ██║   ██████╔╝██║ ╚═╝ ██║██║     ██████╔╝███████║   ██║
    ╚═╝   ╚═════╝ ╚═╝     ╚═╝╚═╝     ╚═════╝ ╚══════╝   ╚═╝   </pre>
-                        <p class="about-tagline">Autonomous Multi-Agent Penetration Testing Framework</p>
+                        <p class="about-tagline">Turn the AI coding agent you already run into a red team.</p>
+                    </div>
+
+                    <!-- Coverage by domain: lit = has a receipt; greyed = in development -->
+                    <div style="margin: 24px 0 8px;">
+                        <h2 style="color: var(--brass, #f5b84b); font-size: 18px; margin: 0 0 4px;">🌩️ Coverage by domain</h2>
+                        <p style="opacity: .65; font-size: 13px; margin: 0 0 14px;">A domain lights up only when there's a benchmark behind it. Greyed tiles are in development.</p>
+                        <div class="feature-grid" id="domainGrid">
+                            <div class="feature-card"><div class="feature-icon">🕸️</div><h3>Web ✅</h3><p>Apps, APIs, auth flows, OWASP Top 10. XBEN 90.1% pass@1.</p></div>
+                            <div class="feature-card"><div class="feature-icon">📂</div><h3>Code ✅</h3><p>White-box source audits. CVE-Zero 6/10 + 9/10 held-out (7 languages).</p></div>
+                            <div class="feature-card"><div class="feature-icon">🚩</div><h3>CTF ✅</h3><p>Wargames, ranges, challenges. Cybench 23/40 hint-free.</p></div>
+                            <div class="feature-card"><div class="feature-icon">🔌</div><h3>Network / Infra ✅</h3><p>Live recon engine (nmap/DNS/HTTP). Lateral + privesc experimental.</p></div>
+                            <div class="feature-card"><div class="feature-icon">🤖</div><h3>Embedded / IoT / OT ✅</h3><p>Firmware, robotics, ICS/SCADA. Coordinated-disclosure CVE pipeline live.</p></div>
+                            <div class="feature-card"><div class="feature-icon">📦</div><h3>Supply chain ⚠️</h3><p>Dependency audits, install-without-confirmation. Dedicated class; real held-out hit.</p></div>
+                            <div class="feature-card"><div class="feature-icon">💰</div><h3>Blockchain ⚠️</h3><p>Smart contracts, DeFi, Solidity. Reproduction only — not novel discovery yet.</p></div>
+                            <div class="feature-card" style="opacity: .42; filter: grayscale(1); position: relative;"><div class="feature-icon">☁️</div><h3>Cloud <span style="font-size:9px; background:rgba(245,184,75,.18); color:#f5b84b; padding:2px 6px; border-radius:4px; vertical-align:middle;">COMING SOON</span></h3><p>AWS/GCP/Azure misconfig, IAM, serverless.</p></div>
+                            <div class="feature-card" style="opacity: .42; filter: grayscale(1); position: relative;"><div class="feature-icon">📱</div><h3>Mobile <span style="font-size:9px; background:rgba(245,184,75,.18); color:#f5b84b; padding:2px 6px; border-radius:4px; vertical-align:middle;">COMING SOON</span></h3><p>Android / iOS app security.</p></div>
+                            <div class="feature-card" style="opacity: .42; filter: grayscale(1); position: relative;"><div class="feature-icon">🏢</div><h3>Identity / AD <span style="font-size:9px; background:rgba(245,184,75,.18); color:#f5b84b; padding:2px 6px; border-radius:4px; vertical-align:middle;">COMING SOON</span></h3><p>Kerberos, pass-the-hash, Active Directory.</p></div>
+                            <div class="feature-card" style="opacity: .42; filter: grayscale(1); position: relative;"><div class="feature-icon">🔐</div><h3>Binary / RE <span style="font-size:9px; background:rgba(245,184,75,.18); color:#f5b84b; padding:2px 6px; border-radius:4px; vertical-align:middle;">COMING SOON</span></h3><p>Overflows, ROP, exploit dev. Needs specialized tooling.</p></div>
+                        </div>
                     </div>
 
                     <div class="feature-grid">
@@ -24088,7 +24107,7 @@ Be specific and actionable. Format as structured JSON.`;
                 { id: 'lane-3', operator: 'guardian', engine: 'human', purpose: 'Approve scope, egress, and final report claims', allowed_tools: ['approve', 'reject', 'annotate'] }
             ];
             const draft = {
-                schema_version: 't3mp3st.operation/v1',
+                schema_version: 't3mp3st_operation/v1',
                 operation_id: opId,
                 mission_id: `mission-${opId.slice(3)}`,
                 family,
@@ -24364,7 +24383,7 @@ Be specific and actionable. Format as structured JSON.`;
                 check('Knowledge surface loaded', health.resources?.packs >= 14 && health.resources?.workflowPresets >= 5, `${health.resources?.packs || 0} packs / ${health.resources?.workflowPresets || 0} presets`);
 
                 const learningStatus = await T3MP3ST_API.get('/api/learning/status');
-                check('Learning proposal gate active', learningStatus.schema_version === 't3mp3st.learning_status/v1' && learningStatus.policy?.silentLearning === false && learningStatus.policy?.acceptanceRequired === true, learningStatus.policy?.proposalFlow || learningStatus.error);
+                check('Learning proposal gate active', learningStatus.schema_version === 't3mp3st_learning_status/v1' && learningStatus.policy?.silentLearning === false && learningStatus.policy?.acceptanceRequired === true, learningStatus.policy?.proposalFlow || learningStatus.error);
                 plinyLearningStatus = learningStatus.schema_version ? learningStatus : plinyLearningStatus;
                 renderPlinyLearning();
 
@@ -24385,7 +24404,7 @@ Be specific and actionable. Format as structured JSON.`;
                 check('Guardrails advertised', context.guardrails?.activeExecutionRequiresReceipt && context.guardrails?.evidenceRequiredForClaims, JSON.stringify(context.guardrails || {}));
 
                 const arsenalStatus = await T3MP3ST_API.get(`/api/arsenal/status?family=${encodeURIComponent(draft.family)}`);
-                check('Arsenal adapter status loaded', arsenalStatus.schema_version === 't3mp3st.arsenal_status/v1' && typeof arsenalStatus.summary?.readiness === 'number', `${arsenalStatus.summary?.readiness || 0}% ready`);
+                check('Arsenal adapter status loaded', arsenalStatus.schema_version === 't3mp3st_arsenal_status/v1' && typeof arsenalStatus.summary?.readiness === 'number', `${arsenalStatus.summary?.readiness || 0}% ready`);
                 plinyArsenalStatus = arsenalStatus;
                 renderPlinyArsenalStatus();
 
@@ -24395,7 +24414,7 @@ Be specific and actionable. Format as structured JSON.`;
                     objective: document.getElementById('plinyDirective')?.value || 'Browser field drill arsenal plan.'
                 });
                 const gatedSteps = (arsenalPlan.steps || []).filter(step => step.gate && step.gate !== 'local_or_read_only');
-                check('Arsenal planner emits evidence gates', arsenalPlan.schema_version === 't3mp3st.arsenal_plan/v1' && (arsenalPlan.steps || []).length > 0 && (arsenalPlan.stopConditions || []).length >= 2, `${(arsenalPlan.steps || []).length} steps / ${gatedSteps.length} gated`);
+                check('Arsenal planner emits evidence gates', arsenalPlan.schema_version === 't3mp3st_arsenal_plan/v1' && (arsenalPlan.steps || []).length > 0 && (arsenalPlan.stopConditions || []).length >= 2, `${(arsenalPlan.steps || []).length} steps / ${gatedSteps.length} gated`);
                 plinyArsenalPlan = arsenalPlan;
                 renderPlinyArsenalStatus();
 
@@ -24409,7 +24428,7 @@ Be specific and actionable. Format as structured JSON.`;
                 check('Mission draft created', Boolean(missionDraft.id), missionDraft.id || missionDraft.error);
 
                 const routePreview = await T3MP3ST_API.post('/api/route-preview', { draftId: missionDraft.id });
-                check('Route preview emitted', routePreview.operationDraft?.schema_version === 't3mp3st.operation/v1', routePreview.operationDraft?.schema_version || routePreview.error);
+                check('Route preview emitted', routePreview.operationDraft?.schema_version === 't3mp3st_operation/v1', routePreview.operationDraft?.schema_version || routePreview.error);
                 check('Route carries runbook context', Boolean(routePreview.operationDraft?.knowledge_context?.operator_runbook), routePreview.operationDraft?.knowledge_context?.operator_runbook || 'missing');
                 const routedFamily = typeof routePreview.operationDraft?.family === 'string' ? routePreview.operationDraft.family : draft.family;
                 const drillFamily = routedFamily || draft.family;
@@ -24474,14 +24493,14 @@ Be specific and actionable. Format as structured JSON.`;
                 check('Hypothesis ledger accepts claim', Boolean(hypothesis.id), hypothesis.id || hypothesis.error);
 
                 const graph = await T3MP3ST_API.get(`/api/evidence-graph?missionId=${encodeURIComponent(missionDraft.id)}&operationId=${encodeURIComponent(activeOperationDraft.operation_id)}&family=${encodeURIComponent(drillFamily)}`);
-                check('Hypothesis graph links proof', graph.schema_version === 't3mp3st.evidence_graph/v1' && (graph.nodes || []).length >= 2 && (graph.edges || []).length >= 1, `${(graph.nodes || []).length} nodes / ${(graph.edges || []).length} edges`);
+                check('Hypothesis graph links proof', graph.schema_version === 't3mp3st_evidence_graph/v1' && (graph.nodes || []).length >= 2 && (graph.edges || []).length >= 1, `${(graph.nodes || []).length} nodes / ${(graph.edges || []).length} edges`);
                 plinyHypotheses = [hypothesis].filter(Boolean);
                 plinyEvidenceGraph = graph.schema_version ? graph : plinyEvidenceGraph;
                 renderPlinyEvidenceGraph();
 
                 const decomposition = hypothesis.id ? await T3MP3ST_API.post(`/api/hypotheses/${hypothesis.id}/decompose`, {}) : {};
                 const decomposedOrders = decomposition.workOrders || [];
-                check('Hypothesis decomposes into work orders', decomposition.schema_version === 't3mp3st.work_order_decomposition/v1' && decomposedOrders.length >= 5, `${decomposedOrders.length} task(s)`);
+                check('Hypothesis decomposes into work orders', decomposition.schema_version === 't3mp3st_work_order_decomposition/v1' && decomposedOrders.length >= 5, `${decomposedOrders.length} task(s)`);
                 plinyWorkOrders = decomposedOrders;
                 renderPlinyWorkOrders();
 
@@ -24503,9 +24522,9 @@ Be specific and actionable. Format as structured JSON.`;
                     target: drillTarget,
                     spawnWorkOrders: false
                 });
-                check('Watch loop pulses mission state', watchPulse.schema_version === 't3mp3st.watch_loop_cycle/v1' && (watchPulse.summary?.signals || 0) >= 1 && Array.isArray(watchPulse.signals), `${watchPulse.summary?.signals || 0} signal(s)`);
+                check('Watch loop pulses mission state', watchPulse.schema_version === 't3mp3st_watch_loop_cycle/v1' && (watchPulse.summary?.signals || 0) >= 1 && Array.isArray(watchPulse.signals), `${watchPulse.summary?.signals || 0} signal(s)`);
                 const watchStatus = await T3MP3ST_API.get(`/api/watch-loop/status?missionId=${encodeURIComponent(missionDraft.id)}&operationId=${encodeURIComponent(activeOperationDraft.operation_id)}&family=${encodeURIComponent(drillFamily)}&target=${encodeURIComponent(drillTarget)}`);
-                check('Watch loop status recalls latest pulse', watchStatus.schema_version === 't3mp3st.watch_loop_status/v1' && watchStatus.latestCycle?.id === watchPulse.id, watchStatus.latestCycle?.id || watchStatus.error);
+                check('Watch loop status recalls latest pulse', watchStatus.schema_version === 't3mp3st_watch_loop_status/v1' && watchStatus.latestCycle?.id === watchPulse.id, watchStatus.latestCycle?.id || watchStatus.error);
                 plinyWatchCycle = watchPulse.schema_version ? watchPulse : plinyWatchCycle;
                 plinyWatchSignals = Array.isArray(watchPulse.signals) ? watchPulse.signals : plinyWatchSignals;
                 renderPlinyWatchLoop();
@@ -24544,11 +24563,11 @@ Be specific and actionable. Format as structured JSON.`;
                     operationId: activeOperationDraft.operation_id,
                     family: drillFamily
                 });
-                check('Learning review proposes memory', learningReview.schema_version === 't3mp3st.learning_review/v1' && (learningReview.proposals || []).length > 0, `${(learningReview.proposals || []).length} proposal(s)`);
+                check('Learning review proposes memory', learningReview.schema_version === 't3mp3st_learning_review/v1' && (learningReview.proposals || []).length > 0, `${(learningReview.proposals || []).length} proposal(s)`);
                 await refreshPlinyLearning();
 
                 const bundle = await T3MP3ST_API.post('/api/mission-bundles', { operationDraft: activeOperationDraft });
-                check('Mission bundle exports handoff', bundle.schema_version === 't3mp3st.mission_bundle/v1' && bundle.runbook?.family === drillFamily, bundle.handoff?.humanSummary || bundle.error);
+                check('Mission bundle exports handoff', bundle.schema_version === 't3mp3st_mission_bundle/v1' && bundle.runbook?.family === drillFamily, bundle.handoff?.humanSummary || bundle.error);
                 plinyLatestBundle = bundle;
                 plinyReproPacks = bundle.reproPacks || plinyReproPacks;
                 plinyPressurePaths = bundle.pressurePaths || plinyPressurePaths;
@@ -24557,7 +24576,7 @@ Be specific and actionable. Format as structured JSON.`;
                 renderPlinyPressurePaths(plinyPressurePaths);
 
                 const gate = await T3MP3ST_API.post('/api/mission-gate', { operationDraft: activeOperationDraft });
-                check('Mission gate holds without receipt', gate.schema_version === 't3mp3st.mission_gate/v1' && ['hold', 'ready'].includes(gate.status), `${gate.status} ${gate.score}/100`);
+                check('Mission gate holds without receipt', gate.schema_version === 't3mp3st_mission_gate/v1' && ['hold', 'ready'].includes(gate.status), `${gate.status} ${gate.score}/100`);
                 plinyMissionGate = gate;
                 renderPlinyMissionBundle(bundle);
 
@@ -25364,7 +25383,7 @@ Be specific and actionable. Format as structured JSON.`;
       +'<button onclick="siResetLineage()" style="font-size:11px;background:rgba(255,68,68,0.1);border:1px solid rgba(255,68,68,0.3);border-radius:8px;color:#ff6b6b;cursor:pointer;padding:9px 14px;">↺ Reset</button></div>'
       +'<div style="font-size:9.5px;color:#667;margin-top:6px;">▶ Copies the exact command to run in a terminal — no browser-exec route yet (honest by design).</div>'); }
 
-  function memoryCard(){ return card('Agent Memory','REAL','#0088ff','Distills facts from runs into proposals you accept — persistent knowledge across missions. Human-gated by design.',
+  function memoryCard(){ return card('T3MP3ST Agent Memory','REAL','#0088ff','Distills facts from runs into proposals you accept — persistent knowledge across missions. Human-gated by design.',
     '<div id="siMemBody" style="font-size:11px;color:#7f93a5;">Loading memory…</div>'
     +'<div style="display:flex;gap:8px;margin-top:10px;"><button onclick="siRunReview()" style="flex:1;font-size:12px;font-weight:700;background:rgba(0,136,255,0.14);border:1px solid rgba(0,136,255,0.4);border-radius:8px;color:#5bb8ff;cursor:pointer;padding:8px;">↻ Run a review pass</button></div>'
     +'<div style="font-size:9.5px;color:#667;margin-top:6px;">🔒 Auto-apply locked OFF — accepting a memory silently is the anti-pattern the moat forbids.</div>'); }

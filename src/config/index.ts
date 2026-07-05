@@ -88,11 +88,11 @@ const DEFAULT_SETTINGS: TempestSettings = {
   apiKeys: {},
 
   defaultProvider: 'openrouter',
-  defaultModel: 'anthropic/claude-opus-4.6',
+  defaultModel: 'anthropic/claude-opus-4.8',
 
   openrouter: {
     baseUrl: 'https://openrouter.ai/api/v1',
-    defaultModel: 'anthropic/claude-opus-4.6',
+    defaultModel: 'anthropic/claude-opus-4.8',
     siteUrl: 'https://github.com/tempest',
     siteName: 'T3MP3ST',
   },
@@ -104,7 +104,7 @@ const DEFAULT_SETTINGS: TempestSettings = {
 
   anthropic: {
     baseUrl: 'https://api.anthropic.com',
-    defaultModel: 'claude-opus-4-6',
+    defaultModel: 'claude-opus-4-8',
   },
 
   openai: {
@@ -174,8 +174,8 @@ export const AVAILABLE_MODELS: Record<LLMProvider, ModelInfo[]> = {
   openrouter: [
     // Anthropic (Feb 2026)
     {
-      id: 'anthropic/claude-opus-4.6',
-      name: 'Claude Opus 4.6',
+      id: 'anthropic/claude-opus-4.8',
+      name: 'Claude Opus 4.8',
       provider: 'Anthropic',
       contextWindow: 200000,
       maxOutput: 32000,
@@ -319,8 +319,8 @@ export const AVAILABLE_MODELS: Record<LLMProvider, ModelInfo[]> = {
   ],
   anthropic: [
     {
-      id: 'claude-opus-4-6',
-      name: 'Claude Opus 4.6',
+      id: 'claude-opus-4-8',
+      name: 'Claude Opus 4.8',
       provider: 'Anthropic',
       contextWindow: 200000,
       maxOutput: 32000,

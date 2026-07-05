@@ -106,7 +106,8 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     task: Task,
     systemPrompt: string,
     target?: Target,
-    sourceContext?: string
+    sourceContext?: string,
+    sharedContext?: string
   ): Promise<AgentResult> {
     const startTime = Date.now();
     const steps: AgentStep[] = [];
@@ -127,7 +128,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     // Build initial messages
     const messages: LLMMessage[] = [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: this.buildTaskPrompt(task, target, toolDefs, sourceContext) },
+      { role: 'user', content: this.buildTaskPrompt(task, target, toolDefs, sourceContext, sharedContext) },
     ];
 
     for (let i = 0; i < this.options.maxIterations; i++) {
@@ -340,7 +341,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
   /**
    * Build the initial task prompt with target context and prior intel
    */
-  private buildTaskPrompt(task: Task, target?: Target, tools?: LLMToolDefinition[], sourceContext?: string): string {
+  private buildTaskPrompt(task: Task, target?: Target, tools?: LLMToolDefinition[], sourceContext?: string, sharedContext?: string): string {
     const parts: string[] = [];
 
     parts.push(`## MISSION TASK: ${task.name}`);
@@ -356,6 +357,15 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       parts.push(`\n### White-box source (security-prioritized excerpt)`);
       parts.push(`The following is a security-prioritized excerpt of the target's own source code. Use it to locate and confirm vulnerabilities against the actual implementation — but only report a finding as verified when a tool result backs it.`);
       parts.push(sourceContext);
+    }
+
+    // Shared intel from the pack board (Phase-2 coordination): what sibling operators have already
+    // found/claimed on this mission. Lets this operator build on tool-verified leads and NOT re-tread
+    // surface a teammate already owns. Absent/empty keeps the solo-operator prompt (the baseline).
+    if (sharedContext && sharedContext.trim().length > 0) {
+      parts.push(`\n### Shared intel from the pack (your teammates' live board)`);
+      parts.push(`Other operators are working this same target in parallel. Below is the current lead-board — tool-verified leads, who has claimed what, and open surface. Build on verified leads, do not duplicate a teammate's claimed work, and chase the hottest UNCLAIMED lead that fits your role.`);
+      parts.push(sharedContext);
     }
 
     if (target) {

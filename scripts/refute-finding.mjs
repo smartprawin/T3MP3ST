@@ -375,6 +375,36 @@ function guardExistsInSource(g, repoRoot) {
   return 'hallucinated';
 }
 
+// MANDATORY, FAIL-SAFE cite-check (mirrors src/mission/adjudicate.ts's mandatory semantics): a
+// REFUTED vote can only stand if it cites a killing guard that ACTUALLY EXISTS in source. Any
+// REFUTE that is guardless, empty-quote, hallucinated/file-missing, OR unverifiable because no repo
+// was supplied is downgraded to SURVIVED. Rationale: the finder is cheap, but a hallucinated guard
+// that refutes a real 0-day is catastrophic — dedup then permanently blocks re-finding it. So an
+// unverifiable refutation must NEVER win. Pure + in-place; unit-tested via --self-test.
+export function applyCiteCheck(verdicts, repoRoot) {
+  for (const v of (verdicts || [])) {
+    if (!v || v.verdict !== 'REFUTED') continue;
+    const g = v.killing_guard;
+    if (!g || !String(g.quote || '').trim()) {
+      v.guard_check = 'guardless'; v.original_verdict = 'REFUTED'; v.verdict = 'SURVIVED';
+      console.log(`    ⚠ REFUTED vote cites no verifiable guard (guardless/empty-quote) — downgraded to SURVIVED`);
+      continue;
+    }
+    if (!repoRoot) {
+      v.guard_check = 'unchecked-no-repo'; v.original_verdict = 'REFUTED'; v.verdict = 'SURVIVED';
+      console.log(`    ⚠ no --repo to cite-check ${g.file}:${g.line} — unverifiable REFUTE downgraded to SURVIVED (fail-safe)`);
+      continue;
+    }
+    const gc = guardExistsInSource(g, repoRoot);
+    v.guard_check = gc;
+    if (gc === 'hallucinated' || gc === 'file-missing') {
+      v.original_verdict = 'REFUTED'; v.verdict = 'SURVIVED';
+      console.log(`    ⚠ killing-guard NOT in source (${gc}) — REFUTED vote rejected: ${g.file}:${g.line} "${String(g.quote).slice(0, 48)}"`);
+    }
+  }
+  return verdicts;
+}
+
 function selfTest() {
   let pass = 0, fail = 0;
   const ok = (l, c) => (c ? (pass++, console.log(`  ✅ ${l}`)) : (fail++, console.log(`  ❌ ${l}`)));
@@ -399,6 +429,12 @@ function selfTest() {
   ok('cite: reversed-order mirror (cited cap < n vs source n > cap) verifies',
     _gv(_fix('d.c', 'if (n > cap) return;\n'), 'cap < n') === 'verified');
   fs.rmSync(_tmp, { recursive: true, force: true });
+  // applyCiteCheck — the automated-path fix: an unverifiable REFUTE must NEVER silently bury a finding
+  ok('citeCheck: guardless REFUTED → SURVIVED', (() => { const vs = [{ verdict: 'REFUTED' }]; applyCiteCheck(vs, null); return vs[0].verdict === 'SURVIVED' && vs[0].guard_check === 'guardless'; })());
+  ok('citeCheck: empty-quote REFUTED → SURVIVED', (() => { const vs = [{ verdict: 'REFUTED', killing_guard: { file: 'a', line: 1, quote: '   ' } }]; applyCiteCheck(vs, null); return vs[0].verdict === 'SURVIVED'; })());
+  ok('citeCheck: no-repo unverifiable REFUTED → SURVIVED (fail-safe)', (() => { const vs = [{ verdict: 'REFUTED', killing_guard: { file: 'a', line: 1, quote: 'if (n > cap) return' } }]; applyCiteCheck(vs, null); return vs[0].verdict === 'SURVIVED' && vs[0].guard_check === 'unchecked-no-repo'; })());
+  ok('citeCheck: SURVIVED votes untouched', (() => { const vs = [{ verdict: 'SURVIVED' }]; applyCiteCheck(vs, null); return vs[0].verdict === 'SURVIVED' && !vs[0].original_verdict; })());
+  ok('citeCheck: hallucinated guard (not in source) → SURVIVED', (() => { const t = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'cc-')); fs.writeFileSync(path.join(t, 'x.c'), 'return arr[idx];\n'); const vs = [{ verdict: 'REFUTED', killing_guard: { file: 'x.c', line: 1, quote: 'if (idx >= len) return -1' } }]; applyCiteCheck(vs, t); fs.rmSync(t, { recursive: true, force: true }); return vs[0].verdict === 'SURVIVED' && vs[0].guard_check === 'hallucinated'; })());
   console.log(`\n${fail === 0 ? '✅ ALL PASS' : `❌ ${fail} FAILED`} — ${pass}/${pass + fail}\n`);
   process.exit(fail === 0 ? 0 : 1);
 }
@@ -471,21 +507,10 @@ async function main() {
     } catch (e) { console.log(`  refuter ${i} (t=${temp}): error — ${e.message}`); verdicts.push(null); }
   }
 
-  // CITE-CHECK: a REFUTED vote must cite a guard that ACTUALLY EXISTS in source. An
-  // unverifiable (hallucinated/paraphrased-absent) guard cannot refute a real finding —
-  // downgrade it to SURVIVED (recording the original claim for transparency). Needs --repo.
-  if (args.repo) {
-    for (const v of verdicts) {
-      if (v && v.verdict === 'REFUTED' && v.killing_guard) {
-        const gc = guardExistsInSource(v.killing_guard, args.repo);
-        v.guard_check = gc;
-        if (gc === 'hallucinated' || gc === 'file-missing') {
-          console.log(`    ⚠ killing-guard NOT in source (${gc}) — REFUTED vote rejected: ${v.killing_guard.file}:${v.killing_guard.line} "${String(v.killing_guard.quote).slice(0, 48)}"`);
-          v.original_verdict = 'REFUTED'; v.verdict = 'SURVIVED';
-        }
-      }
-    }
-  }
+  // CITE-CHECK (MANDATORY + FAIL-SAFE): downgrade every unverifiable REFUTE (guardless / empty-quote /
+  // hallucinated / not-in-source / no-repo-to-check) to SURVIVED, so a hallucinated guard can never
+  // silently bury a real finding. cli-hunt now always passes --repo; the no-repo path stays fail-safe.
+  applyCiteCheck(verdicts, (args.repo && args.repo !== 'true') ? path.resolve(args.repo) : null);
   const adj = adjudicate(verdicts);
   const outPath = path.join(path.dirname(fp), `${f.slug || 'finding'}.refutation_report.json`);
   fs.writeFileSync(outPath, JSON.stringify({ slug: f.slug, ...adj, verdicts, at: f.commit ? `commit ${f.commit}` : undefined }, null, 2));
