@@ -364,6 +364,37 @@ function inferCommandTarget(parsed: ParsedCommand): string {
   return positional[positional.length - 1] || 'unknown-network-target';
 }
 
+function resolveCommandExecutionTarget(
+  body: Record<string, unknown>,
+  parsed: ParsedCommand,
+): { target: string } | { error: string } {
+  const inferredTarget = normalizeTargetValue(inferCommandTarget(parsed));
+
+  // Local-only commands can still carry a UI target for bookkeeping, but networked
+  // commands must be authorized against the host they will actually contact. A
+  // caller-supplied body.target is NOT authoritative; at most it may mirror the
+  // parsed command target. This prevents approving one host and executing a
+  // whitelisted network command against another.
+  if (!NETWORK_COMMANDS.has(parsed.bin)) {
+    return { target: normalizeTargetValue(body.target || inferredTarget) };
+  }
+
+  if (!inferredTarget || inferredTarget === 'unknown-network-target') {
+    return { error: `Could not infer network target for ${parsed.bin}; include the target as a direct command argument.` };
+  }
+
+  if (body.target !== undefined) {
+    const suppliedTarget = normalizeTargetValue(body.target);
+    if (hostFromTarget(suppliedTarget) !== hostFromTarget(inferredTarget)) {
+      return {
+        error: `Command target mismatch: requested approval target "${suppliedTarget}" does not match parsed command target "${inferredTarget}".`,
+      };
+    }
+  }
+
+  return { target: inferredTarget };
+}
+
 async function executeCommand(command: string, timeout = 30000): Promise<ToolResult> {
   const startTime = Date.now();
   const parsed = parseCommand(command);
@@ -1064,6 +1095,13 @@ function approvalMatches(approval: ApprovalRequest, action: GuardAction, target:
   if (approval.action !== action) return false;
   if (approval.target === '*') return action === 'model_call' || action === 'autonomous_execution';
   return hostFromTarget(approval.target) === hostFromTarget(target);
+}
+
+function ensureExecTargetsWithinApprovedTarget(targets: string[], approvedTarget: string): string[] {
+  const approvedHost = hostFromTarget(normalizeTargetValue(approvedTarget));
+  return targets
+    .map(target => normalizeTargetValue(target))
+    .filter(target => hostFromTarget(target) !== approvedHost);
 }
 
 function approvalMatchesGateScope(approval: ApprovalRequest, action: GuardAction, operationId: string, target: string): boolean {
@@ -4600,17 +4638,28 @@ export function broadcastEvent(event: string, data: Record<string, unknown>): vo
 // single operator uses a handful of dashboard tabs; this only rejects a pathological flood.
 const MAX_SSE_CLIENTS = 64;
 app.get('/api/events', (_req: Request, res: Response) => {
+  const origin = _req.get('origin');
+  if (origin && !isLoopbackOrigin(origin)) {
+    res.status(403).json({
+      error: 'Cross-origin event stream rejected',
+      detail: 'The SSE feed may contain live mission/task/finding metadata and is only available to the localhost UI.',
+    });
+    return;
+  }
   if (sseClients.size >= MAX_SSE_CLIENTS) {
     res.status(503).json({ error: 'Too many event-stream clients', detail: `SSE client cap (${MAX_SSE_CLIENTS}) reached — close an existing dashboard tab and retry.` });
     return;
   }
-  // SSE headers
-  res.writeHead(200, {
+  // SSE headers. Do not use a wildcard ACAO here: browsers can open EventSource
+  // cross-origin, and the event feed carries live operational metadata. Reflect
+  // only a trusted loopback Origin; same-origin/no-Origin clients need no CORS header.
+  const headers: Record<string, string> = {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
-  });
+  };
+  if (origin) headers['Access-Control-Allow-Origin'] = origin;
+  res.writeHead(200, headers);
 
   // Send initial heartbeat
   res.write('event: connected\ndata: {"status":"connected"}\n\n');
@@ -5837,8 +5886,9 @@ app.post('/api/tools/execute', async (req: Request, res: Response): Promise<void
   if (!command) { res.status(400).json({ error: 'Command required' }); return; }
   const parsed = parseCommand(command);
   if ('error' in parsed) { res.status(400).json({ error: parsed.error }); return; }
-  const target = normalizeTargetValue(body.target || inferCommandTarget(parsed));
-  const guard = guardAction(body, 'command_execution', target, `Run ${parsed.bin} against ${target}`);
+  const targetResolution = resolveCommandExecutionTarget(body, parsed);
+  if ('error' in targetResolution) { res.status(400).json({ error: targetResolution.error }); return; }
+  const guard = guardAction(body, 'command_execution', targetResolution.target, `Run ${parsed.bin} against ${targetResolution.target}`);
   if (!guard.allowed) { blockForApproval(res, guard); return; }
   const result = await executeCommand(command, timeout);
   res.json(result);
@@ -7189,6 +7239,15 @@ app.post('/api/admiral/launch', async (req: Request, res: Response): Promise<voi
     const execConfig = activeGeneral.executePlan();
     if (execConfig.review.status === 'hold') {
       res.status(409).json({ error: 'General plan gate is HOLD', mode: 'live', plan, review: execConfig.review });
+      return;
+    }
+    const outOfScopeTargets = ensureExecTargetsWithinApprovedTarget(execConfig.targets, brief.target);
+    if (outOfScopeTargets.length) {
+      res.status(403).json({
+        error: 'Admiral LIVE plan contains targets outside the approved brief target',
+        approvedTarget: brief.target,
+        outOfScopeTargets,
+      });
       return;
     }
     const broughtUp = bringUpMissionFromPlan(execConfig, generalConfig);
