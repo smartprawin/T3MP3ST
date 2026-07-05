@@ -793,8 +793,10 @@ class ConfigManager {
       ...settings,
       apiKeys: {
         openrouter: settings.apiKeys.openrouter ? '***REDACTED***' : undefined,
+        venice: settings.apiKeys.venice ? '***REDACTED***' : undefined,
         anthropic: settings.apiKeys.anthropic ? '***REDACTED***' : undefined,
         openai: settings.apiKeys.openai ? '***REDACTED***' : undefined,
+        xai: settings.apiKeys.xai ? '***REDACTED***' : undefined,
       },
     };
     writeFileSync(filePath, JSON.stringify(safeSettings, null, 2));
@@ -805,11 +807,16 @@ class ConfigManager {
    */
   createEnvTemplate(filePath: string = join(process.cwd(), '.env.template')): void {
     const template = `# T3MP3ST Environment Configuration
-# Copy this file to .env and fill in your API keys
+# Save this file as ~/.t3mp3st/.env and fill in your API keys
+# The setup script writes the same T3MP3ST-owned file.
 
 # OpenRouter API Key (recommended - access to multiple models)
 # Get your key at: https://openrouter.ai/keys
 OPENROUTER_API_KEY=
+
+# Venice API Key
+# Get your key at: https://venice.ai
+VENICE_API_KEY=
 
 # Anthropic API Key (direct Claude access)
 # Get your key at: https://console.anthropic.com/
@@ -818,6 +825,10 @@ ANTHROPIC_API_KEY=
 # OpenAI API Key
 # Get your key at: https://platform.openai.com/api-keys
 OPENAI_API_KEY=
+
+# xAI API Key
+# Get your key at: https://console.x.ai/
+XAI_API_KEY=
 `;
     writeFileSync(filePath, template);
   }
