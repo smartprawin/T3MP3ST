@@ -212,14 +212,13 @@ const EXPOSURE_BASE: Record<Exposure, number> = {
 // =============================================================================
 
 function isExcluded(path: string, excludeGlobs: string[]): boolean {
-  // Loose match: any exclude fragment appearing as a path segment (or substring)
-  // rejects the path. Prototype-grade — not a real glob engine.
+  // Bare fragments match a path SEGMENT only; glob (`*`) entries match as a
+  // substring.
   const segments = path.split(sep);
   for (const ex of excludeGlobs) {
     if (!ex) continue;
-    // Treat a bare fragment as "matches any segment equal to it OR any substring".
     if (segments.includes(ex)) return true;
-    if (path.includes(ex)) return true;
+    if (ex.includes('*') && path.includes(ex.replace(/\*/g, ''))) return true;
   }
   return false;
 }
