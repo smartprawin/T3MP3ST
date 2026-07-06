@@ -6950,9 +6950,13 @@ Correlating findings across agents, identifying patterns, producing actionable i
         };
 
         window.approveReceipt = async function approveReceipt(id) {
+            const receipt = ReceiptsState.approvals.find(function(a){ return a.id === id; });
             await T3MP3ST_API.post('/api/approvals/' + id + '/approve', {});
             await window.refreshReceiptsPage();
             if (window.toast) toast('Receipt approved: ' + id, 'success');
+            if (receipt?.action === 'autonomous_execution' && window.__t3mpAdmiralPendingRetry && typeof window.retryPendingAdmiralLaunch === 'function') {
+                window.retryPendingAdmiralLaunch();
+            }
         };
 
         window.rejectReceipt = async function rejectReceipt(id) {
@@ -6966,6 +6970,9 @@ Correlating findings across agents, identifying patterns, producing actionable i
             await Promise.all(pending.map(function(a){ return T3MP3ST_API.post('/api/approvals/' + a.id + '/approve', {}); }));
             await window.refreshReceiptsPage();
             if (window.toast) toast('Approved ' + pending.length + ' pending receipt(s)', pending.length ? 'success' : 'info');
+            if (pending.some(function(a){ return a.action === 'autonomous_execution'; }) && window.__t3mpAdmiralPendingRetry && typeof window.retryPendingAdmiralLaunch === 'function') {
+                window.retryPendingAdmiralLaunch();
+            }
         };
 
         function renderReceiptsPage() {
@@ -25266,6 +25273,14 @@ Be specific and actionable. Format as structured JSON.`;
     if (typeof updateSitRep === 'function') updateSitRep('reconnaissance', '⚓ Op Admiral is planning the ' + t.label + ' operation on ' + tgt + '…', 'ACTIVE');
     if (typeof addIntel === 'function') addIntel('ADMIRAL', '⚓ Brief handed to Op Admiral — planning ' + brief.family + ' on ' + tgt + ' (~30-90s)', 'info');
     if (window.toast) toast('⚓ Op Admiral is planning the operation…', 'info');
+    window.__t3mpAdmiralPendingRetry = false;
+    window.retryPendingAdmiralLaunch = function(){
+      if (!window.__t3mpAdmiralPendingRetry) return;
+      window.__t3mpAdmiralPendingRetry = false;
+      if (typeof addIntel === 'function') addIntel('SCOPEGUARD', 'Receipt approved — retrying Admiral launch', 'info');
+      if (window.toast) toast('Receipt approved — retrying Admiral launch', 'info');
+      setTimeout(function(){ window.admiralLaunch(); }, 50);
+    };
     const admiralApiBase = (typeof getApiBase === 'function')
       ? getApiBase()
       : ((typeof T3MP3ST_API !== 'undefined' && T3MP3ST_API.baseUrl) || '');
@@ -25290,9 +25305,10 @@ Be specific and actionable. Format as structured JSON.`;
         const requestedIds = requested.map(function(a){ return a.id; }).filter(Boolean);
         const targets = (d.outOfScopeTargets || requested.map(function(a){ return a.target; }).filter(Boolean)).join(', ');
         if (!(isLab || autonomous)) {
+          window.__t3mpAdmiralPendingRetry = true;
           addIntel?.('SCOPEGUARD', 'Approval required: ' + (targets || tgt) + ' — open Scope Receipts', 'warning');
           navigateTo?.('receipts');
-          throw new Error((d.error || 'Approval required') + ' — open Scope Receipts to approve ' + (targets || 'pending targets') + '.');
+          throw new Error((d.error || 'Approval required') + ' — approve ' + (targets || 'pending targets') + ' in Scope Receipts; launch will retry after approval.');
         }
         await Promise.all(requestedIds.map(function(id){
           return admiralFetch('/api/approvals/' + id + '/approve', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
