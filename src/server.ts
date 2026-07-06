@@ -144,7 +144,8 @@ const PORT = process.env.T3MP3ST_PORT || 3333;
 // this local command-executing API (CSRF / DNS-rebinding), NOT remote attackers.
 // The CORS lock + origin guard below defend that vector; if this is ever exposed
 // beyond localhost, add real Bearer-token auth as the upgrade path.
-const HOST = process.env.T3MP3ST_HOST || '127.0.0.1';
+// DOCKER: Inside containers, bind to 0.0.0.0 (env var can still override).
+const HOST = process.env.T3MP3ST_HOST || (process.env.DOCKER === 'true' ? '0.0.0.0' : '127.0.0.1');
 // B-02: only enforce the Host-header allow-list when bound to loopback (the
 // default). If the operator EXPLICITLY exposes the server (T3MP3ST_HOST set to a
 // non-loopback address) they've opted into network access behind their own front,
