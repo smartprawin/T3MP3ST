@@ -397,6 +397,28 @@ describe('Wedged-dispatch timeout backstop', () => {
     expect(op.getSummary().failedTasks).toBe(1);
   });
 
+  it('mission completion stops the command loop so status/timer do not stay active', async () => {
+    const mod = await import('../index.js');
+    const command = new mod.TempestCommand({
+      name: 'Lifecycle Op',
+      llm: { provider: 'mock', model: 'mock-model' },
+    });
+
+    let stopped = false;
+    command.on('command:stopped', () => { stopped = true; });
+    command.start();
+
+    const mission = command.mission.getActiveMission();
+    expect(mission).toBeDefined();
+    expect(command.getStatus().running).toBe(true);
+
+    command.mission.completeMission(mission!.id);
+
+    expect(command.getStatus().running).toBe(false);
+    expect(command.mission.getActiveMission()).toBeUndefined();
+    expect(stopped).toBe(true);
+  });
+
   it('a wedged mission reaches phase advancement once the per-dispatch backstop fires', async () => {
     // Tiny backstop so the test is fast and deterministic.
     const prev = process.env.T3MP3ST_TASK_TIMEOUT_MS;
