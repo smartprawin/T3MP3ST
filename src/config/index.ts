@@ -23,6 +23,7 @@ export interface TempestSettings {
     anthropic?: string;
     openai?: string;
     xai?: string;
+    litellm?: string;
   };
 
   // Default LLM settings
@@ -57,6 +58,12 @@ export interface TempestSettings {
 
   // xAI — Grok Build / Grok models (OpenAI-compatible API)
   xai: {
+    baseUrl: string;
+    defaultModel: string;
+  };
+
+  // LiteLLM AI gateway proxy — routes to 100+ LLM providers via unified API
+  litellm: {
     baseUrl: string;
     defaultModel: string;
   };
@@ -122,6 +129,11 @@ const DEFAULT_SETTINGS: TempestSettings = {
   xai: {
     baseUrl: 'https://api.x.ai/v1',
     defaultModel: 'grok-build-0.1',
+  },
+
+  litellm: {
+    baseUrl: 'http://localhost:4000/v1',
+    defaultModel: 'gpt-4o',
   },
 
   codex: {
@@ -381,6 +393,16 @@ export const AVAILABLE_MODELS: Record<LLMProvider, ModelInfo[]> = {
       capabilities: ['reasoning', 'code', 'analysis', 'vision', 'fast'],
     },
   ],
+  litellm: [
+    {
+      id: 'gpt-4o',
+      name: 'Any model via LiteLLM proxy (default: gpt-4o)',
+      provider: 'LiteLLM',
+      contextWindow: 128000,
+      maxOutput: 4096,
+      capabilities: ['reasoning', 'code', 'analysis', 'vision', 'tools'],
+    },
+  ],
   codex: [
     {
       id: 'codex-default',
@@ -547,7 +569,7 @@ class ConfigManager {
   /**
    * Set an API key for a provider
    */
-  setApiKey(provider: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai', key: string): void {
+  setApiKey(provider: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'litellm', key: string): void {
     const apiKeys = this.config.get('apiKeys');
     apiKeys[provider] = key;
     this.config.set('apiKeys', apiKeys);
@@ -556,7 +578,7 @@ class ConfigManager {
   /**
    * Get an API key for a provider
    */
-  getApiKey(provider: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai'): string | undefined {
+  getApiKey(provider: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'litellm'): string | undefined {
     // First check environment variables (highest priority)
     const envVarMap = {
       openrouter: 'OPENROUTER_API_KEY',
@@ -564,6 +586,7 @@ class ConfigManager {
       anthropic: 'ANTHROPIC_API_KEY',
       openai: 'OPENAI_API_KEY',
       xai: 'XAI_API_KEY',
+      litellm: 'LITELLM_API_KEY',
     };
 
     // Force a fully UNCONFIGURED server (no key from env OR the saved store) — used by
@@ -582,7 +605,7 @@ class ConfigManager {
   /**
    * Check if a provider has a valid API key configured
    */
-  hasApiKey(provider: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai'): boolean {
+  hasApiKey(provider: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'litellm'): boolean {
     const key = this.getApiKey(provider);
     return !!key && key.length > 10;
   }
@@ -590,10 +613,20 @@ class ConfigManager {
   /**
    * Remove an API key
    */
-  removeApiKey(provider: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai'): void {
+  removeApiKey(provider: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'litellm'): void {
     const apiKeys = this.config.get('apiKeys');
     delete apiKeys[provider];
     this.config.set('apiKeys', apiKeys);
+  }
+
+  /**
+   * Check if a LiteLLM proxy is configured (base URL set via env or config)
+   */
+  hasLiteLLMProxy(): boolean {
+    const envUrl = process.env.LITELLM_BASE_URL?.trim();
+    if (envUrl) return true;
+    const storedUrl = this.config.get('litellm')?.baseUrl;
+    return !!storedUrl && storedUrl !== 'http://localhost:4000/v1';
   }
 
   /**
@@ -607,6 +640,7 @@ class ConfigManager {
     if (this.hasApiKey('anthropic')) providers.push('anthropic');
     if (this.hasApiKey('openai')) providers.push('openai');
     if (this.hasApiKey('xai')) providers.push('xai');
+    if (this.hasLiteLLMProxy()) providers.push('litellm');
 
     // Codex uses the local Codex CLI/account auth instead of API-key storage.
     providers.push('codex');
@@ -654,6 +688,11 @@ class ConfigManager {
         baseUrl = this.config.get('xai').baseUrl;
         actualModel = model || this.config.get('xai').defaultModel;
         break;
+      case 'litellm':
+        apiKey = this.getApiKey('litellm');
+        baseUrl = process.env.LITELLM_BASE_URL?.trim() || this.config.get('litellm').baseUrl;
+        actualModel = model || process.env.LITELLM_MODEL?.trim() || this.config.get('litellm').defaultModel;
+        break;
       case 'codex':
         actualModel = model || this.config.get('codex').defaultModel;
         break;
@@ -699,8 +738,9 @@ class ConfigManager {
     const flag = (process.env.TEMPEST_MODEL_FALLBACK || '').trim().toLowerCase();
     if (!flag || ['0', 'false', 'off', 'no'].includes(flag)) return [];
     const chain: FallbackEntry[] = [];
-    const add = (p: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai') => {
-      if (p === primary || !this.hasApiKey(p)) return;
+    const add = (p: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'litellm') => {
+      if (p === primary) return;
+      if (p === 'litellm' ? !this.hasLiteLLMProxy() : !this.hasApiKey(p)) return;
       chain.push({
         provider: p,
         model: this.config.get(p).defaultModel,
@@ -710,6 +750,7 @@ class ConfigManager {
     };
     add('openrouter');
     add('venice');
+    add('litellm');
     add('anthropic');
     add('openai');
     add('xai');
@@ -736,6 +777,9 @@ class ConfigManager {
       case 'openai':
         this.config.set('defaultModel', this.config.get('openai').defaultModel);
         break;
+      case 'litellm':
+        this.config.set('defaultModel', this.config.get('litellm').defaultModel);
+        break;
       case 'codex':
         this.config.set('defaultModel', this.config.get('codex').defaultModel);
         break;
@@ -758,6 +802,9 @@ class ConfigManager {
         break;
       case 'openai':
         this.config.set('openai', { ...this.config.get('openai'), defaultModel: model });
+        break;
+      case 'litellm':
+        this.config.set('litellm', { ...this.config.get('litellm'), defaultModel: model });
         break;
       case 'codex':
         this.config.set('codex', { ...this.config.get('codex'), defaultModel: model });
@@ -797,6 +844,7 @@ class ConfigManager {
         anthropic: settings.apiKeys.anthropic ? '***REDACTED***' : undefined,
         openai: settings.apiKeys.openai ? '***REDACTED***' : undefined,
         xai: settings.apiKeys.xai ? '***REDACTED***' : undefined,
+        litellm: settings.apiKeys.litellm ? '***REDACTED***' : undefined,
       },
     };
     writeFileSync(filePath, JSON.stringify(safeSettings, null, 2));
@@ -829,6 +877,12 @@ OPENAI_API_KEY=
 # xAI API Key
 # Get your key at: https://console.x.ai/
 XAI_API_KEY=
+
+# LiteLLM Proxy (AI gateway — 100+ providers via single API)
+# Docs: https://docs.litellm.ai/docs/proxy/quick_start
+LITELLM_BASE_URL=http://localhost:4000/v1
+LITELLM_API_KEY=
+LITELLM_MODEL=gpt-4o
 `;
     writeFileSync(filePath, template);
   }
@@ -841,8 +895,8 @@ XAI_API_KEY=
 export const config = new ConfigManager();
 
 // Helper functions for quick access
-export const getApiKey = (provider: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai') => config.getApiKey(provider);
-export const setApiKey = (provider: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai', key: string) => config.setApiKey(provider, key);
-export const hasApiKey = (provider: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai') => config.hasApiKey(provider);
+export const getApiKey = (provider: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'litellm') => config.getApiKey(provider);
+export const setApiKey = (provider: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'litellm', key: string) => config.setApiKey(provider, key);
+export const hasApiKey = (provider: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'litellm') => config.hasApiKey(provider);
 export const getLLMConfig = (provider?: LLMProvider, model?: string) => config.getLLMConfig(provider, model);
 export const getConfiguredProviders = () => config.getConfiguredProviders();
