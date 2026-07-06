@@ -1094,7 +1094,13 @@ function approvalIsFresh(approval: ApprovalRequest): boolean {
 function approvalMatches(approval: ApprovalRequest, action: GuardAction, target: string): boolean {
   if (approval.action !== action) return false;
   if (approval.target === '*') return action === 'model_call' || action === 'autonomous_execution';
-  return hostFromTarget(approval.target) === hostFromTarget(target);
+  const approvalHost = hostFromTarget(approval.target);
+  const targetHost = hostFromTarget(target);
+  if (approvalHost.startsWith('*.')) {
+    const suffix = approvalHost.slice(1);
+    return targetHost.endsWith(suffix) && targetHost !== approvalHost.slice(2);
+  }
+  return approvalHost === targetHost;
 }
 
 function ensureExecTargetsWithinApprovedTarget(targets: string[], approvedTarget: string): string[] {
