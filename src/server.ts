@@ -507,6 +507,7 @@ interface ApprovalRequest {
   target: string;
   reason: string;
   status: ApprovalStatus;
+  wildcardOptIn?: boolean;
   operationId?: string;
   requestedBy: DraftSource | 'system';
   createdAt: string;
@@ -1091,10 +1092,23 @@ function approvalIsFresh(approval: ApprovalRequest): boolean {
   return Date.parse(approval.expiresAt) > Date.now();
 }
 
+function targetUsesWildcard(target: string): boolean {
+  const raw = normalizeTargetValue(target).toLowerCase();
+  if (raw === '*') return true;
+  const withoutScheme = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
+  return withoutScheme.startsWith('*.') || hostFromTarget(raw).startsWith('*.');
+}
+
+function wildcardHostFromTarget(target: string): string {
+  const raw = normalizeTargetValue(target).toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
+  return raw.replace(/\/.*$/, '').replace(/:\d+$/, '');
+}
+
 function approvalMatches(approval: ApprovalRequest, action: GuardAction, target: string): boolean {
   if (approval.action !== action) return false;
+  if (targetUsesWildcard(approval.target) && !approval.wildcardOptIn) return false;
   if (approval.target === '*') return action === 'model_call' || action === 'autonomous_execution';
-  const approvalHost = hostFromTarget(approval.target);
+  const approvalHost = targetUsesWildcard(approval.target) ? wildcardHostFromTarget(approval.target) : hostFromTarget(approval.target);
   const targetHost = hostFromTarget(target);
   if (approvalHost.startsWith('*.')) {
     const suffix = approvalHost.slice(1);
@@ -1136,9 +1150,7 @@ function findApproval(body: Record<string, unknown>, action: GuardAction, target
     if (approval && approvalIsFresh(approval) && approvalMatches(approval, action, target)) return approval;
   }
 
-  return [...approvalRequests.values()]
-    .filter(approval => approvalIsFresh(approval) && approvalMatches(approval, action, target))
-    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0] || null;
+  return null;
 }
 
 function createApprovalRequest(action: GuardAction, target: string, reason: string, body: Record<string, unknown>): ApprovalRequest {
@@ -1149,6 +1161,7 @@ function createApprovalRequest(action: GuardAction, target: string, reason: stri
     target,
     reason,
     status: 'pending',
+    wildcardOptIn: body.allowWildcard === true && targetUsesWildcard(target),
     operationId: typeof operationDraft?.operation_id === 'string' ? operationDraft.operation_id : undefined,
     requestedBy: ['human', 'agent', 't3mp3st'].includes(String(body.source)) ? body.source as DraftSource : 'system',
     createdAt: nowIso(),
@@ -4826,6 +4839,15 @@ app.post('/api/approvals/request', (req: Request, res: Response) => {
     });
     return;
   }
+  if (targetUsesWildcard(target) && target !== '*' && body.allowWildcard !== true) {
+    res.status(400).json({
+      error: 'Wildcard host approval requires explicit opt-in',
+      action,
+      target,
+      next: 'Send allowWildcard:true only when the operator intentionally approves the whole subdomain wildcard.',
+    });
+    return;
+  }
   const reason = typeof body.reason === 'string' && body.reason.trim()
     ? body.reason.trim()
     : `Approval requested for ${action} against ${target}`;
@@ -4860,6 +4882,13 @@ app.post('/api/approvals/authorize-target', (req: Request, res: Response) => {
     res.status(400).json({
       error: 'Wildcard target authorization is not allowed for active actions',
       next: 'Authorize one concrete host or URL so receipts remain target-scoped.',
+    });
+    return;
+  }
+  if (targetUsesWildcard(target) && target !== '*' && body.allowWildcard !== true) {
+    res.status(400).json({
+      error: 'Wildcard host authorization requires explicit opt-in',
+      next: 'Send allowWildcard:true only when the operator intentionally approves the whole subdomain wildcard.',
     });
     return;
   }

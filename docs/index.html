@@ -3666,6 +3666,10 @@
                                 <div id="spicyWarnStrip" style="display:none;padding:7px 9px;background:rgba(255,68,68,0.10);border-left:3px solid #ff4444;border-radius:4px;margin-bottom:8px;font-size:11px;color:#ff8a8a;"></div>
                                 <div id="approvalAuditFeed" style="max-height:180px;overflow-y:auto;font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.55;"><span style="color:#5a5f67;font-size:10.5px;">Waiting for gated tool calls…</span></div>
                             </section>
+                            <section class="hunt-panel">
+                                <div class="ops-card-title"><span>Scope Receipts</span><span id="scopeReceiptCount">0 pending</span></div>
+                                <div id="scopeReceiptFeed" style="max-height:180px;overflow-y:auto;font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.55;"><span style="color:#5a5f67;font-size:10.5px;">No pending scope receipts.</span></div>
+                            </section>
                         </div>
                         <div class="hunt-pulse-board" id="zeroDayHuntPulse">
                             <section class="hunt-panel">
@@ -5916,11 +5920,17 @@ tempest.operators.<span class="function">spawn</span>(<span class="string">'scan
                     this._eventSource.addEventListener('connected', () => {
                         console.log('[BackendDispatch] SSE connected');
                         try { fetchToolApprovals(); } catch {}
+                        try { fetchScopeReceipts(); } catch {}
                     });
 
                     // Capability-approval gate: every gated tool decision (allow/deny) + spicy warning.
                     this._eventSource.addEventListener('arsenal.approval', (e) => {
                         try { pushApprovalAuditEvent(JSON.parse(e.data)); } catch {}
+                    });
+                    ['approval.requested', 'approval.approved', 'approval.rejected'].forEach((eventName) => {
+                        this._eventSource.addEventListener(eventName, () => {
+                            try { fetchScopeReceipts(); } catch {}
+                        });
                     });
 
                     this._eventSource.addEventListener('operator:spawned', (e) => {
@@ -24399,6 +24409,55 @@ Be specific and actionable. Format as structured JSON.`;
                 if (data.audit.length) { feed.dataset.live = '1'; feed.innerHTML = ''; data.audit.slice(-40).forEach(rec => pushApprovalAuditEvent(rec, true)); }
             }
         }
+        async function fetchScopeReceipts() {
+            try {
+                if (!T3MP3ST_API.baseUrl) return;
+                const r = await fetch(`${T3MP3ST_API.baseUrl}/api/approvals`);
+                if (!r.ok) return;
+                const data = await r.json();
+                renderScopeReceipts((data && data.approvals) || []);
+            } catch (e) { /* offline — panel stays in its last known state */ }
+        }
+        function renderScopeReceipts(approvals) {
+            const feed = document.getElementById('scopeReceiptFeed');
+            const count = document.getElementById('scopeReceiptCount');
+            if (!feed) return;
+            const pending = (approvals || []).filter(a => a && a.status === 'pending');
+            const recent = (approvals || []).slice().sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))).slice(0, 12);
+            if (count) count.textContent = `${pending.length} pending`;
+            if (!recent.length) {
+                feed.innerHTML = '<span style="color:#5a5f67;font-size:10.5px;">No scope receipts yet.</span>';
+                return;
+            }
+            feed.innerHTML = recent.map(a => {
+                const status = String(a.status || 'pending');
+                const color = status === 'approved' ? '#00ff88' : status === 'rejected' ? '#ff6b6b' : status === 'expired' ? '#888' : '#ffaa00';
+                const expires = a.expiresAt ? ` · expires ${escapeHtml(new Date(a.expiresAt).toLocaleTimeString())}` : '';
+                const controls = status === 'pending'
+                    ? `<button onclick="approveScopeReceipt('${escapeHtml(a.id)}')" style="margin-left:6px;padding:2px 6px;border:1px solid rgba(0,255,136,0.4);background:rgba(0,255,136,0.08);color:#00ff88;border-radius:4px;font-size:10px;">Approve</button><button onclick="rejectScopeReceipt('${escapeHtml(a.id)}')" style="margin-left:4px;padding:2px 6px;border:1px solid rgba(255,107,107,0.4);background:rgba(255,107,107,0.08);color:#ff6b6b;border-radius:4px;font-size:10px;">Reject</button>`
+                    : '';
+                return `<div style="padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05);color:${color};"><b>${escapeHtml(status.toUpperCase())}</b> <span style="color:#aaa;">${escapeHtml(a.action || '')}</span> → ${escapeHtml(a.target || '')}<br><span style="color:#666;">${escapeHtml(a.id || '')}${expires}</span>${controls}</div>`;
+            }).join('');
+            setOpsReady('approval', pending.length ? 'block' : 'ok', pending.length ? `${pending.length} pending` : 'receipts ok');
+        }
+        window.approveScopeReceipt = async function(id) {
+            try {
+                await T3MP3ST_API.post(`/api/approvals/${id}/approve`, { approvedBy: 'local-operator' });
+                try { addIntel('SCOPEGUARD', `Approved receipt ${id}`, 'success'); } catch (e) {}
+                await fetchScopeReceipts();
+            } catch (e) {
+                try { toast('Receipt approval failed', 'error'); } catch (err) {}
+            }
+        };
+        window.rejectScopeReceipt = async function(id) {
+            try {
+                await T3MP3ST_API.post(`/api/approvals/${id}/reject`, {});
+                try { addIntel('SCOPEGUARD', `Rejected receipt ${id}`, 'warning'); } catch (e) {}
+                await fetchScopeReceipts();
+            } catch (e) {
+                try { toast('Receipt rejection failed', 'error'); } catch (err) {}
+            }
+        };
         function pushApprovalAuditEvent(rec, silent) {
             const feed = document.getElementById('approvalAuditFeed');
             if (!feed || !rec) return;
@@ -24442,6 +24501,7 @@ Be specific and actionable. Format as structured JSON.`;
                 try { addMissionLog('info', `Approval receipt requested: ${approval.id}`); } catch (e) {}
                 try { addIntel('SCOPEGUARD', `Receipt ${approval.id} is ${approval.status}`, 'info'); } catch (e) {}
                 try { toast(`Receipt requested: ${approval.id}`, 'success'); } catch (e) {}
+                try { fetchScopeReceipts(); } catch (e) {}
             } catch (e) {
                 setOpsReady('approval', 'block', 'request failed');
                 try { addMissionLog('warning', `Approval receipt failed: ${e.message || e}`); } catch (err) {}

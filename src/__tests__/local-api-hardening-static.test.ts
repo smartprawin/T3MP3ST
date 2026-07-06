@@ -30,7 +30,7 @@ describe('local API authorization hardening invariants', () => {
     expect(route).toMatch(/guardAction\(body,\s*['"]command_execution['"],\s*targetResolution\.target/);
   });
 
-  it('Admiral live launch re-checks every General-produced execution target before mission bring-up', () => {
+  it('Admiral live launch permits expanded targets only with explicit operator approval receipts', () => {
     const route = routeBlock("app.post('/api/admiral/launch'", '// =============================================================================\n// BOUNTY PLATFORM INTEGRATIONS');
 
     expect(route).toMatch(/ensureExecTargetsAuthorized\(execConfig\.targets,\s*brief\.target,\s*req\.body/);
@@ -38,5 +38,16 @@ describe('local API authorization hardening invariants', () => {
     expect(route.indexOf('ensureExecTargetsAuthorized(execConfig.targets, brief.target'))
       .toBeLessThan(route.indexOf('bringUpMissionFromPlan(execConfig, generalConfig)'));
     expect(route).toMatch(/approvals/);
+    expect(route).toMatch(/approvalIds/);
+  });
+
+  it('approval lookup requires explicit receipt ids and wildcard hosts require opt-in', () => {
+    const findApproval = routeBlock('function findApproval(', 'function createApprovalRequest');
+
+    expect(findApproval).toMatch(/body\.approvalId/);
+    expect(findApproval).toMatch(/body\.approvalIds/);
+    expect(findApproval).not.toMatch(/\[\.\.\.approvalRequests\.values\(\)\]/);
+    expect(serverSource).toMatch(/Wildcard host approval requires explicit opt-in/);
+    expect(serverSource).toMatch(/body\.allowWildcard !== true/);
   });
 });
