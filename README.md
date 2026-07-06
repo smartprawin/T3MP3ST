@@ -96,6 +96,31 @@ npm run verify-claims             # re-derives every headline from committed JSO
 
 Library/SDK usage, the full HTTP API, and MCP setup live in [docs/](docs/).
 
+### Docker
+
+Run T3MP3ST API server in a container:
+
+```bash
+cp .env.example .env       # configure API keys
+docker compose up -d       # API → http://localhost:3333
+docker compose logs -f     # view logs
+```
+
+Test the API:
+```bash
+curl http://localhost:3333/api/health
+curl http://localhost:3333/api/bounty/platforms
+```
+
+Execute commands inside the container:
+
+```bash
+docker compose exec app npm run verify-claims
+docker compose exec app npm run cve:bench
+```
+
+Full deployment guide: [docs/DOCKER.md](docs/DOCKER.md).
+
 ## What ships today
 
 The framework is an 8-operator kill chain, and this table won't blow smoke about it. **Recon is a live, tool-backed engine** — and the teeth are already real: 90.1% pass@1 on XBEN, 8/10 held-out post-cutoff CVEs pinned to exact file/line/CWE, and a coordinated-disclosure pipeline that's live enough to have drafts held for vendor coordination right now. What's *not* proven is the swarm. Each downstream operator — Exploiter, Infiltrator, Exfiltrator, Ghost — runs the **same real, tool-backed ReAct loop as recon** (real exploit tools, not stubs), but the headline numbers came from a single agent, not the coordinated 8-operator cell, and end-to-end swarm exploitation is unbenchmarked and still unreliable. The engine is real; the swarm is the part still earning its stripes. Loud where we've earned it, blunt about the rest.
