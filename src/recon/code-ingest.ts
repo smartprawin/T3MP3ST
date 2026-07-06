@@ -43,6 +43,7 @@ import {
   type SourceFile,
   type SourceBundle,
 } from '../orchestration/context-pack.js';
+import { redactString } from '../redact.js';
 
 // =============================================================================
 // TYPES
@@ -863,7 +864,7 @@ export function formatUnitForLLM(unit: AnalysisUnit): string {
     `risk signals: ${unit.riskSignals.length ? unit.riskSignals.join(', ') : '(none)'}`,
   );
   lines.push('---');
-  lines.push(b.body);
+  lines.push(redactString(b.body));
   return lines.join('\n');
 }
 
