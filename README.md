@@ -55,6 +55,9 @@ Offensive security sits behind years of practice and expensive tooling. The bet 
 | 🤖 **Robotics / OT / embedded** | Coordinated-disclosure pipeline for OSS vuln hunting (OSV + live-PoC + refuter) | ✅ Pipeline stable |
 | 📂 **Source code** | White-box repo analysis with blind master-builder decomposition | ⚠️ Python-only ingest |
 | 💰 **Smart contracts** | Damn Vulnerable DeFi | ⚠️ reproduction, not novel discovery |
+| ☁️ **Cloud (IaC)** | Misconfig-detection benchmark (`cloud:bench`) + opt-in cloud arsenal (aws/az/gcloud + scoutsuite/cloudfox/pmapper; pacu gated) | 🚧 IaC-misconfig scaffolding — live-cloud exploitation not yet benchmarked |
+| 📱 **Mobile** | Built-in static analyzer (manifest misconfig + secret/cleartext detection, `mobile:bench`) + opt-in arsenal (mobsfscan/objection/drozer; frida gated) | 🚧 static-detection scaffolding — dynamic exploitation not benchmarked |
+| 🔩 **Binary / RE** | Decompiled-output sink detector (unsafe-copy / format-string / cmd-injection / int-overflow, `binary:bench`) + opt-in arsenal (ghidra/radare2/objdump/checksec/strings; gdb gated) | 🚧 static sink-detection scaffolding — solving/pwn not benchmarked |
 
 ## Quick start
 
