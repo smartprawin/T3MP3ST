@@ -1070,7 +1070,8 @@ class LocalAgentAdapter implements LLMProviderAdapter {
   async chat(messages: LLMMessage[], options?: ChatOptions): Promise<LLMResponse> {
     const agentId = this.config.model || 'codex';
     const prompt = this.formatPrompt(messages, options);
-    const content = (await localAgentChat(agentId, prompt, { timeoutMs: this.config.timeout || 240000 })).trim();
+    const timeoutMs = typeof this.config.timeout === 'number' && this.config.timeout > 0 ? this.config.timeout : undefined;
+    const content = (await localAgentChat(agentId, prompt, { timeoutMs })).trim();
     // Tool-calling over text: if the Arsenal was offered, parse the agent's tool requests so the
     // ReAct loop EXECUTES them instead of treating this planning turn as the (abstaining) final answer.
     const toolCalls = options?.tools?.length ? parseTextToolCalls(content) : undefined;

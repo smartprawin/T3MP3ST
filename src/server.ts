@@ -6478,6 +6478,18 @@ function providerNeedsApiKey(provider: string): boolean {
   return !['codex', 'mock', 'local', 'local-agent'].includes(provider);
 }
 
+function readPositiveTimeoutEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === '') return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function readGeneralTimeoutEnv(): number | undefined {
+  return readPositiveTimeoutEnv('TEMPEST_GENERAL_TIMEOUT_MS')
+    ?? readPositiveTimeoutEnv('T3MP3ST_GENERAL_TIMEOUT_MS');
+}
+
 // SECURITY NOTE: `apiKey` is accepted from the request BODY here (and in the
 // mission/general routes that call this). Sending secrets in the body is not
 // ideal — an Authorization header is preferred — but the same-origin UI posts
@@ -6501,7 +6513,9 @@ function resolveGeneralLLMConfig(provider: string, model: string | undefined, ap
       model: model || 'codex',
       maxTokens: 8192,
       temperature: 0.4,
-      timeout: Number(process.env.TEMPEST_GENERAL_TIMEOUT_MS) || 300000,
+      timeout: readGeneralTimeoutEnv()
+        ?? readPositiveTimeoutEnv('T3MP3ST_LOCAL_AGENT_TIMEOUT_MS')
+        ?? 600000,
     };
   }
   const baseConfig = config.getLLMConfig(selectedProvider as any, model);
@@ -6515,7 +6529,7 @@ function resolveGeneralLLMConfig(provider: string, model: string | undefined, ap
     apiKey: effectiveKey,
     maxTokens: 8192,
     temperature: 0.4,
-    timeout: Number(process.env.TEMPEST_GENERAL_TIMEOUT_MS) || 300000, // General planning needs room (was a hardcoded 60s); override via env
+    timeout: readGeneralTimeoutEnv() ?? 300000, // General planning needs room (was a hardcoded 60s); override via env
   };
 }
 

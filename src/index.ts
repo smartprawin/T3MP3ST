@@ -821,13 +821,14 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
    * GENEROUS per-dispatch wall-clock backstop (ms). If a single task dispatch stays
    * in-flight longer than this, the tick loop force-resolves it as a timeout so
    * pendingOrActive can reach 0 and the mission can advance/complete even when an
-   * operator promise wedges. Deliberately large (default 5 min) so it NEVER kills a
-   * legitimately-slow-but-working LLM task (e.g. opus planning ~165s); it only fires
-   * on truly-hung dispatches. Override via T3MP3ST_TASK_TIMEOUT_MS.
+   * operator promise wedges. Deliberately large (default 5 min for API models,
+   * 30 min for local-agent backends) so it does not kill legitimately slow local
+   * CLI work; it only fires on truly-hung dispatches. Override via
+   * T3MP3ST_TASK_TIMEOUT_MS.
    */
   /**
-   * Resolve the dispatch timeout from the environment, falling back to the 5-minute
-   * default. Guards against a non-numeric / non-positive override.
+   * Resolve the dispatch timeout from the environment, falling back to the
+   * provider-specific default. Guards against a non-numeric / non-positive override.
    */
   private static resolveTaskTimeoutMs(provider?: LLMProvider): number {
     const DEFAULT_TASK_TIMEOUT_MS = 300000; // 5 minutes — generous backstop, not a deadline
@@ -1035,8 +1036,8 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
    * never advances, and completeMission() is never called: the mission HANGS.
    *
    * On every tick we scan the in-flight dispatches and force-resolve any that have
-   * exceeded the GENEROUS wall-clock backstop (taskTimeoutMs, default 5 min), or
-   * that exhibit the exact wedge symptom (owning operator is `executing`/`tasked`
+   * exceeded the GENEROUS wall-clock backstop (taskTimeoutMs), or that exhibit
+   * the exact wedge symptom (owning operator is `executing`/`tasked`
    * but its currentTask is null — i.e. it has silently dropped the task). For each
    * we: (1) mark the task failed/timed-out in the queue, (2) clear its dispatch
    * bookkeeping, and (3) reset the owning operator back to idle so it can take new
