@@ -496,8 +496,12 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     });
 
     // Forward mission events
-    this.mission.on('mission:completed', (_mission) => {
-      // Could trigger reporting here
+    this.mission.on('mission:completed', () => {
+      this.stop();
+    });
+
+    this.mission.on('mission:aborted', () => {
+      this.stop();
     });
 
     this.mission.on('mission:phase_changed', ({ mission, newPhase }) => {
