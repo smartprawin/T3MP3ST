@@ -243,6 +243,11 @@ function agentFailureOutput(output: string): string | null {
   return null;
 }
 
+function envTimeoutMs(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 /**
  * Drive a connected agent with a one-shot headless prompt (real round-trip — SPENDS the agent's quota).
  * Used by /ping (liveness proof) and /dispatch (actually using the operator).
@@ -256,7 +261,7 @@ export function runLocalAgent(
   const t0 = Date.now();
   if (!spec) return Promise.resolve({ ok: false, latencyMs: 0, output: '', error: `unknown agent: ${id}` });
   const args = spec.oneShot(prompt, opts.model);
-  const timeoutMs = opts.timeoutMs ?? 120000;
+  const timeoutMs = opts.timeoutMs ?? envTimeoutMs('T3MP3ST_LOCAL_AGENT_TIMEOUT_MS', 600000);
   const maxChars = opts.maxChars ?? 4000;
   // child env: provider keys stripped + HOME pinned to the real agent home (see childEnv).
   const env = childEnv();
@@ -306,7 +311,7 @@ export function localAgentChat(id: string, prompt: string, opts: { model?: strin
   // child env: provider keys stripped + HOME pinned to the real agent home (see childEnv).
   const env = childEnv();
   const model = opts.model && opts.model !== 'codex-default' && opts.model !== id ? opts.model : undefined;
-  const timeoutMs = opts.timeoutMs ?? 240000;
+  const timeoutMs = opts.timeoutMs ?? envTimeoutMs('T3MP3ST_LOCAL_AGENT_TIMEOUT_MS', 600000);
 
   let args: string[];
   let viaStdin = true;

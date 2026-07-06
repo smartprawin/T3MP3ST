@@ -208,6 +208,7 @@ import type {
   TempestConfig,
   LLMConfig,
   RuntimeHooks,
+  LLMProvider,
   OperatorArchetype,
   CommandEvents,
   Finding,
@@ -325,6 +326,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
   private tickInterval: NodeJS.Timeout | null = null;
   private tickCount: number = 0;
   private hooks: RuntimeHooks;
+  private readonly taskTimeoutMs: number;
 
   /**
    * White-box source context (security-prioritized code excerpt), set by the
@@ -359,6 +361,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     super();
     this.name = config.name;
     this.hooks = config.hooks || {};
+    this.taskTimeoutMs = TempestCommand.resolveTaskTimeoutMs(config.llm.provider);
 
     // Initialize LLM backbone
     this.llm = new LLMBackbone(config.llm);
@@ -822,20 +825,19 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
    * legitimately-slow-but-working LLM task (e.g. opus planning ~165s); it only fires
    * on truly-hung dispatches. Override via T3MP3ST_TASK_TIMEOUT_MS.
    */
-  private readonly taskTimeoutMs: number = TempestCommand.resolveTaskTimeoutMs();
-
   /**
    * Resolve the dispatch timeout from the environment, falling back to the 5-minute
    * default. Guards against a non-numeric / non-positive override.
    */
-  private static resolveTaskTimeoutMs(): number {
+  private static resolveTaskTimeoutMs(provider?: LLMProvider): number {
     const DEFAULT_TASK_TIMEOUT_MS = 300000; // 5 minutes — generous backstop, not a deadline
+    const LOCAL_AGENT_TASK_TIMEOUT_MS = 1800000; // local CLI agents can need multiple slow turns
     const raw = process.env.T3MP3ST_TASK_TIMEOUT_MS;
     if (raw != null && raw.trim() !== '') {
       const parsed = Number(raw);
       if (Number.isFinite(parsed) && parsed > 0) return parsed;
     }
-    return DEFAULT_TASK_TIMEOUT_MS;
+    return provider === 'local-agent' ? LOCAL_AGENT_TASK_TIMEOUT_MS : DEFAULT_TASK_TIMEOUT_MS;
   }
 
   /** Track whether we've seeded initial tasks for the current mission */
