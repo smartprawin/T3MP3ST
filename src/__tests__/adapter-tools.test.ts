@@ -56,6 +56,8 @@ describe('adapterToCustomTool — mint gate', () => {
     expect(adapterToCustomTool(adapter('metasploit'), deps)).toBeNull(); // catalog_only
     expect(adapterToCustomTool(adapter('hydra'), deps)).toBeNull();      // catalog_only
     expect(adapterToCustomTool(adapter('bloodhound'), deps)).toBeNull(); // import_only
+    expect(adapterToCustomTool(adapter('pacu'), deps)).toBeNull();       // catalog_only (AWS exploitation framework)
+    expect(adapterToCustomTool(adapter('frida'), deps)).toBeNull();      // catalog_only (runtime code injection)
   });
 
   it('mints a command-ready adapter with a working name + category', () => {
@@ -64,6 +66,30 @@ describe('adapterToCustomTool — mint gate', () => {
     expect(tool.name).toBe('nmap_tool');
     expect(tool.category).toBe('network'); // passthrough of the catalog category
     expect(typeof tool.handler).toBe('function');
+  });
+});
+
+describe('cloud/mobile category loadouts — presence + risk gating', () => {
+  const deps = makeDeps();
+  const execOf = (id: string) => adapter(id).execution;
+
+  it('cloud: assessment/recon tools are receipt-gated; the exploitation framework is catalog-only', () => {
+    expect(execOf('scoutsuite')).toBe('receipt_required');
+    expect(execOf('cloudfox')).toBe('receipt_required');
+    expect(execOf('pmapper')).toBe('receipt_required');
+    expect(execOf('pacu')).toBe('catalog_only');
+    expect(adapter('scoutsuite').category).toBe('cloud');
+    expect(adapterToCustomTool(adapter('pacu'), deps)).toBeNull(); // never callable
+  });
+
+  it('mobile: static scanner is safe; dynamic/runtime tools are gated', () => {
+    expect(execOf('apkleaks')).toBe('safe_command');
+    expect(execOf('mobsfscan')).toBe('safe_command'); // static source scanner — safe
+    expect(execOf('objection')).toBe('receipt_required');
+    expect(execOf('frida')).toBe('catalog_only');
+    expect(adapter('apkleaks').category).toBe('mobile');
+    expect(adapterToCustomTool(adapter('frida'), deps)).toBeNull();        // never callable
+    expect(adapterToCustomTool(adapter('apkleaks'), deps)).not.toBeNull(); // safe, mintable
   });
 });
 
