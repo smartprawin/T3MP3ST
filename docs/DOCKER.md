@@ -110,14 +110,14 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 The default `Dockerfile` is single-stage for simplicity. For production, consider a multi-stage build:
 
 ```dockerfile
-FROM node:18-alpine AS builder
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS builder
 WORKDIR /app
 COPY package*.json tsconfig.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM node:18-alpine
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2
 WORKDIR /app
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
@@ -151,12 +151,12 @@ On Linux, match container UID/GID if needed:
 sudo chown -R $(id -u):$(id -g) reports evidence
 ```
 
-### Port 3000 already in use
+### Port 3333 already in use
 
-Change the host port in `docker-compose.yml`:
+Change the host port in `docker-compose.yml` (keep the `127.0.0.1:` prefix for security):
 ```yaml
 ports:
-  - "8080:3000"  # host:container
+  - "127.0.0.1:8080:3333"  # host:container
 ```
 
 ## Cleanup
@@ -178,16 +178,31 @@ docker system prune -a --volumes
 
 ## Security Notes
 
+**⚠️ CRITICAL: External Exposure Risk**
+
+The Docker setup binds the server to `0.0.0.0` inside the container to allow port forwarding. This disables the Host-header/DNS-rebinding guard in `server.ts`.
+
+**SAFE:** The default `docker-compose.yml` publishes the port as `127.0.0.1:3333:3333`, which restricts access to localhost only.
+
+**UNSAFE:** Running `docker run -p 3333:3333` (without the `127.0.0.1:` prefix) or `network_mode: host` exposes the **unauthenticated command-executing API** on all network interfaces (0.0.0.0), allowing anyone on your network (or the internet if port-forwarded) to execute arbitrary system commands.
+
+**Deployment Rules:**
+- ✅ Always bind to `127.0.0.1` on the host: `-p 127.0.0.1:3333:3333`
+- ✅ Use a reverse proxy (nginx, Caddy, Coolify) with authentication for external access
+- ❌ Never use `network_mode: host` in untrusted networks
+- ❌ Never publish to `0.0.0.0` without authentication middleware
+
+**Additional Security:**
 - Container runs as root by default. For production, add a non-root user in the Dockerfile.
-- `.env` is mounted read-only in the compose file to prevent accidental modification.
-- Network mode is `bridge` by default. Change to `host` if scanning from the container's network context.
+- The `.env` file is excluded from the image via `.dockerignore` to prevent secret leakage.
+- Network mode is `bridge` by default (isolated from host network).
 
 ## Integration with Tools
 
 External security tools (nuclei, ffuf, sqlmap) can run in separate containers or be installed in a custom Dockerfile:
 
 ```dockerfile
-FROM node:18-alpine
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2
 RUN apk add --no-cache nmap nuclei ffuf
 # ... rest of Dockerfile
 ```

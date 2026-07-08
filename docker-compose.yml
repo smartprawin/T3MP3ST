@@ -8,7 +8,6 @@ services:
     env_file:
       - .env
     environment:
-      - T3MP3ST_HOST=127.0.0.1
       - T3MP3ST_PORT=3333
     volumes:
       - ./reports:/app/reports
@@ -16,7 +15,8 @@ services:
     ports:
       - "127.0.0.1:3333:3333"
     healthcheck:
-      test: ["CMD", "node", "-e", "process.exit(0)"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3333/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 40s
