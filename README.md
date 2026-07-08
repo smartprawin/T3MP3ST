@@ -77,6 +77,10 @@ export OPENROUTER_API_KEY=...     # or VENICE_API_KEY / ANTHROPIC_API_KEY / OPEN
 export XAI_API_KEY=...            # Grok Build (grok-build-0.1) — xAI's coding model, native tool-calling
 ```
 
+Slow local agents can be given more room with `T3MP3ST_LOCAL_AGENT_TIMEOUT_MS`
+for each CLI call, `T3MP3ST_TASK_TIMEOUT_MS` for mission tasks, and
+`T3MP3ST_GENERAL_TIMEOUT_MS` for planning requests. Values are milliseconds.
+
 Or run it **fully offline** on your own model — no key, no cloud. Defaults to Ollama; point it at any OpenAI-compatible server (LM Studio, vLLM, llama.cpp):
 
 ```bash
