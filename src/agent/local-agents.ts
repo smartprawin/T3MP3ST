@@ -273,25 +273,38 @@ function detectOne(spec: AgentSpec): Promise<AgentDetection> {
       resolve({ ...base, installed: false, authed: false, ready: false });
       return;
     }
-    // Launch the RESOLVED path (a .cmd shim needs a shell; a real .exe does not).
-    execFile(resolved, spec.versionArgs, { timeout: 8000, shell: needsShell(resolved) }, (err, stdout) => {
-      if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
-        resolve({ ...base, installed: false, authed: false, ready: false });
-        return;
-      }
-      // even a non-zero exit but no ENOENT means the binary exists
-      const version = spec.parseVersion(String(stdout || ''));
+    // Found on PATH ⇒ installed. Used when the version probe can't RUN (a synchronous spawn
+    // throw like EPERM, or any async error that isn't ENOENT): the binary exists, we just
+    // couldn't read its version. Auth is a filesystem/keychain check, so it still works.
+    const installedNoVersion = () => {
       const auth = authState(spec);
       resolve({
-        ...base,
-        installed: true,
-        path: resolved,
-        version,
-        authed: auth.authed,
-        authMethod: auth.method,
-        ready: auth.authed,
+        ...base, installed: true, path: resolved, version: '?',
+        authed: auth.authed, authMethod: auth.method, ready: auth.authed,
       });
-    });
+    };
+    try {
+      // Launch the RESOLVED path (a .cmd shim needs a shell; a real .exe does not).
+      execFile(resolved, spec.versionArgs, { timeout: 8000, shell: needsShell(resolved) }, (err, stdout) => {
+        if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+          resolve({ ...base, installed: false, authed: false, ready: false });
+          return;
+        }
+        // even a non-zero exit but no ENOENT means the binary exists
+        const version = spec.parseVersion(String(stdout || ''));
+        const auth = authState(spec);
+        resolve({
+          ...base, installed: true, path: resolved, version,
+          authed: auth.authed, authMethod: auth.method, ready: auth.authed,
+        });
+      });
+    } catch {
+      // execFile can throw SYNCHRONOUSLY (e.g. `spawn EPERM` when child-process creation is
+      // restricted). Inside this Promise executor a throw would REJECT the promise, which fails
+      // the Promise.allSettled sibling below and — pre-fix, under Promise.all — 500'd the whole
+      // /api/agents/local/detect endpoint, blanking the Settings panel to "0/0 installed".
+      installedNoVersion();
+    }
   });
 }
 
@@ -301,7 +314,17 @@ export async function detectLocalAgents(): Promise<AgentDetection[]> {
   // local-agent auto-detection) so key-required / fail-closed paths can be exercised
   // deterministically — used by scripts/arsenal-smoke.mjs for a reproducible run.
   if (/^(1|true|yes|on)$/i.test((process.env.T3MP3ST_DISABLE_LOCAL_AGENTS || '').trim())) return [];
-  return Promise.all(SPECS.map(detectOne));
+  // allSettled, NOT all: a single agent's detection failure must degrade to "not installed"
+  // for that one agent, never reject the whole batch (which 500'd /detect and blanked the UI).
+  const settled = await Promise.allSettled(SPECS.map(detectOne));
+  return settled.map((r, i) => {
+    if (r.status === 'fulfilled') return r.value;
+    const s = SPECS[i];
+    return {
+      id: s.id, label: s.label, vendor: s.vendor, bin: s.bin, blurb: s.blurb,
+      invokeHint: s.invokeHint, installed: false, authed: false, ready: false,
+    };
+  });
 }
 
 export interface AgentRunResult {
