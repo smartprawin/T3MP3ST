@@ -1209,6 +1209,8 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
         return new OpenAIAdapter(config); // xAI (Grok Build / grok-*) is OpenAI-compatible
       case 'gemini':
         return new OpenAIAdapter(config); // Gemini via Google's OpenAI-compatible endpoint (baseUrl ends in /v1beta/openai)
+      case 'deepseek':
+        return new OpenAIAdapter(config); // DeepSeek native API is OpenAI-compatible
       case 'codex':
         return new CodexAdapter(config);
       case 'mock':
@@ -1483,6 +1485,12 @@ export function createOpenAIBackbone(apiKey?: string, model?: string): LLMBackbo
   return new LLMBackbone(llmConfig);
 }
 
+export function createDeepSeekBackbone(apiKey?: string, model?: string): LLMBackbone {
+  const llmConfig = config.getLLMConfig('deepseek', model);
+  if (apiKey) llmConfig.apiKey = apiKey;
+  return new LLMBackbone(llmConfig);
+}
+
 export function createMockBackbone(): LLMBackbone {
   return new LLMBackbone({
     provider: 'mock',
@@ -1520,6 +1528,9 @@ export function createBestAvailableBackbone(): LLMBackbone {
   }
   if (providers.includes('openai')) {
     return createOpenAIBackbone();
+  }
+  if (providers.includes('deepseek')) {
+    return createDeepSeekBackbone();
   }
 
   // Default to mock if no API keys configured
