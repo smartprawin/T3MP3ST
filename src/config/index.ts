@@ -516,7 +516,7 @@ class ConfigManager {
 
   constructor() {
     this.config = new Conf<TempestSettings>({
-      projectName: 't3mp3st',
+      projectName: 'T3MP3ST',
       defaults: DEFAULT_SETTINGS,
     });
 
@@ -533,7 +533,7 @@ class ConfigManager {
     // operators often run T3MP3ST inside target repos, and importing that repo's
     // secrets would contaminate this process with unrelated credentials.
     const envPaths = [
-      join(homedir(), '.t3mp3st', '.env'),
+      join(homedir(), 'T3MP3ST', '.env'),
       join(homedir(), '.env'),
     ];
 
