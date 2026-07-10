@@ -516,7 +516,7 @@ class ConfigManager {
 
   constructor() {
     this.config = new Conf<TempestSettings>({
-      projectName: 'T3MP3ST',
+      projectName: 't3mp3st',
       defaults: DEFAULT_SETTINGS,
     });
 
@@ -533,7 +533,7 @@ class ConfigManager {
     // operators often run T3MP3ST inside target repos, and importing that repo's
     // secrets would contaminate this process with unrelated credentials.
     const envPaths = [
-      join(homedir(), 'T3MP3ST', '.env'),
+      join(homedir(), '.t3mp3st', '.env'),
       join(homedir(), '.env'),
     ];
 
@@ -544,6 +544,9 @@ class ConfigManager {
         const envContent = readFileSync(envPath, 'utf-8');
         const lines = envContent.split('\n');
 
+        // Validation variables added
+        const VALID_PROVIDERS = ['openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'local'];
+        
         for (const line of lines) {
           const trimmed = line.trim();
           if (trimmed && !trimmed.startsWith('#')) {
@@ -557,8 +560,8 @@ class ConfigManager {
               process.env[key] = value;
 
               // Track LLM_PROVIDER for default provider
-              if (key === 'LLM_PROVIDER') {
-                envProvider = value;
+              if (key === 'LLM_PROVIDER' && VALID_PROVIDERS.includes(value.toLowerCase())) {
+                envProvider = value.toLowerCase();
               }
             }
           }
