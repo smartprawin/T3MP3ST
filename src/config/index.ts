@@ -538,15 +538,14 @@ class ConfigManager {
     ];
 
     let envProvider: string | undefined;
-    
+
     for (const envPath of envPaths) {
       if (existsSync(envPath)) {
         const envContent = readFileSync(envPath, 'utf-8');
         const lines = envContent.split('\n');
-
         // Validation variables added
         const VALID_PROVIDERS = ['openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'local'];
-        
+
         for (const line of lines) {
           const trimmed = line.trim();
           if (trimmed && !trimmed.startsWith('#')) {
@@ -689,7 +688,7 @@ class ConfigManager {
    */
   getLLMConfig(provider?: LLMProvider, model?: string): LLMConfig {
     let actualProvider = provider;
-   
+
     if (!actualProvider) {
       const envProvider = process.env.TEMPEST_DEFAULT_PROVIDER?.trim();
       if (envProvider) {
