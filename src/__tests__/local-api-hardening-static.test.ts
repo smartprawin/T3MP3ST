@@ -50,4 +50,17 @@ describe('local API authorization hardening invariants', () => {
     expect(serverSource).toMatch(/Wildcard host approval requires explicit opt-in/);
     expect(serverSource).toMatch(/body\.allowWildcard !== true/);
   });
+
+  it('authorize-target only approves existing pending receipts and cannot mint broad active-action approvals', () => {
+    const route = routeBlock("app.post('/api/approvals/authorize-target'", "app.post('/api/approvals/:id/reject'");
+
+    expect(route).toMatch(/approvalId/);
+    expect(route).toMatch(/approvalIds/);
+    expect(route).toMatch(/approvalRequests\.get\(id\)/);
+    expect(route).toMatch(/approval\.status !== 'pending'/);
+    expect(route).toMatch(/Math\.min\(30/);
+    expect(route).not.toMatch(/createApprovalRequest/);
+    expect(route).not.toMatch(/allowedActions/);
+    expect(route).not.toMatch(/command_execution['"],\s*['"]autonomous_execution/);
+  });
 });

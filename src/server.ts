@@ -4874,8 +4874,15 @@ app.post('/api/approvals/:id/approve', (req: Request, res: Response) => {
 app.post('/api/approvals/authorize-target', (req: Request, res: Response) => {
   const body = req.body as Record<string, unknown>;
   const target = normalizeTargetValue(body.target);
-  if (!target) {
-    res.status(400).json({ error: 'target required' });
+  const approvalIds = [
+    typeof body.approvalId === 'string' ? body.approvalId : '',
+    ...(Array.isArray(body.approvalIds) ? body.approvalIds.filter((id): id is string => typeof id === 'string') : []),
+  ].filter(Boolean);
+  if (!approvalIds.length) {
+    res.status(400).json({
+      error: 'approvalId or approvalIds required',
+      next: 'Request a pending receipt first, then approve that exact receipt id.',
+    });
     return;
   }
   if (target === '*') {
@@ -4893,35 +4900,37 @@ app.post('/api/approvals/authorize-target', (req: Request, res: Response) => {
     return;
   }
 
-  const requestedActions = Array.isArray(body.actions) ? body.actions.map(String) : [];
-  const allowedActions: GuardAction[] = ['mission_execution', 'network_request', 'command_execution', 'autonomous_execution'];
-  const actions = (requestedActions.length ? requestedActions : allowedActions)
-    .filter((action): action is GuardAction => allowedActions.includes(action as GuardAction));
-  if (!actions.length) {
-    res.status(400).json({ error: 'No supported approval actions requested' });
-    return;
-  }
-
-  const ttlMinutes = Number(body.ttlMinutes || process.env.T3MP3ST_APPROVAL_TTL_MINUTES || 240);
-  const expiresAt = new Date(Date.now() + Math.max(1, ttlMinutes) * 60_000).toISOString();
-  const approvals = actions.map((action) => {
-    const approval = createApprovalRequest(
-      action,
-      target,
-      typeof body.reason === 'string' && body.reason.trim()
-        ? body.reason.trim()
-        : `Authorize ${action} against ${target}`,
-      body
-    );
+  const ttlMinutes = Math.max(1, Math.min(30, Number(body.ttlMinutes || 30)));
+  const expiresAt = new Date(Date.now() + ttlMinutes * 60_000).toISOString();
+  const approvals: ApprovalRequest[] = [];
+  for (const id of [...new Set(approvalIds)]) {
+    const approval = approvalRequests.get(id);
+    if (!approval) {
+      res.status(404).json({ error: 'Approval request not found', approvalId: id });
+      return;
+    }
+    if (approval.status !== 'pending') {
+      res.status(409).json({ error: 'Approval request is not pending', approvalId: id, status: approval.status });
+      return;
+    }
+    if (target && !approvalMatches(approval, approval.action, target)) {
+      res.status(400).json({
+        error: 'Approval target mismatch',
+        approvalId: id,
+        approvalTarget: approval.target,
+        target,
+      });
+      return;
+    }
     approval.status = 'approved';
     approval.approvedBy = typeof body.approvedBy === 'string' ? body.approvedBy : 'local-operator';
     approval.expiresAt = expiresAt;
     approval.updatedAt = nowIso();
     emitContractEvent('approval.approved', { approvalId: approval.id, action: approval.action, target: approval.target });
-    return approval;
-  });
+    approvals.push(approval);
+  }
 
-  res.status(201).json({ target, expiresAt, approvals });
+  res.json({ target: target || null, expiresAt, approvals });
 });
 
 app.post('/api/approvals/:id/reject', (req: Request, res: Response) => {
