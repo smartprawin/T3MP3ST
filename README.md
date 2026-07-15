@@ -87,6 +87,7 @@ Or run it **fully offline** on your own model — no key, no cloud. Defaults to 
 ollama serve && ollama pull llama3                          # or an OpenAI-compatible server
 export TEMPEST_LOCAL_BASE_URL=http://localhost:11434/api    # LM Studio: http://localhost:1234/v1
 export TEMPEST_LOCAL_MODEL=llama3
+npm run build                                               # only needed from a git clone
 npx tempest                                                 # → "Change default provider" → local
 ```
 
