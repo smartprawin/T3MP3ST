@@ -64,6 +64,9 @@ Never merge:
 
 ## Output
 
+Use `templates/merge-train-report.md` as the standard merge-session report and
+`templates/maintainer-action-items.md` when follow-up work remains.
+
 ```markdown
 ## Merge Train
 

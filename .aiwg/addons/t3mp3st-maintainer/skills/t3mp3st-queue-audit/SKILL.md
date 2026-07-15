@@ -67,6 +67,8 @@ Use this skill before any maintainer merge session. It is read-only by default.
 
 ## Output
 
+Use `templates/queue-audit-report.md` as the standard report format.
+
 ```markdown
 ## T3MP3ST Queue Audit
 

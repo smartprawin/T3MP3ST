@@ -26,7 +26,8 @@ Use it when:
 ├── README.md
 ├── agents/
 ├── capabilities/
-└── skills/
+├── skills/
+└── templates/
 ```
 
 ## Skills
@@ -50,6 +51,18 @@ Use it when:
 - `t3mp3st-pr-audit-flow`
 - `t3mp3st-merge-train-flow`
 - `t3mp3st-issue-steward-flow`
+
+## Templates
+
+- `queue-audit-report.md` — full PR/issue queue state and suggested merge order.
+- `pr-audit-review.md` — findings-first PR audit with SHA, checks, decision, and
+  residual risk.
+- `issue-response.md` — issue classification, evidence, action, and maintainer
+  response draft.
+- `merge-train-report.md` — per-PR merge results, stop reason, issue
+  reconciliation, and next candidate.
+- `maintainer-action-items.md` — owner/action/blocker/follow-up list for user
+  communication and handoff.
 
 ## Usage
 

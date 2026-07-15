@@ -64,6 +64,10 @@ Use this to handle issue threads before implementation.
 
 ## Output
 
+Use `templates/issue-response.md` as the standard issue report and draft-comment
+format. Use `templates/maintainer-action-items.md` when the issue produces
+follow-up work.
+
 ```markdown
 Issue #N — <class>
 Evidence:

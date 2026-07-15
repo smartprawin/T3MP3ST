@@ -72,6 +72,8 @@ currently runs `vitest run src`.
 
 ## Output
 
+Use `templates/pr-audit-review.md` as the standard review format.
+
 Lead with findings. If none:
 
 ```markdown
