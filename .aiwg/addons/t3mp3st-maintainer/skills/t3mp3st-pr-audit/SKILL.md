@@ -1,0 +1,87 @@
+---
+namespace: t3mp3st-maintainer
+name: t3mp3st-pr-audit
+platforms: [all]
+description: Audit one T3MP3ST pull request as a maintainer, focusing on correctness, security boundaries, tests, and merge readiness.
+triggers:
+  - t3mp3st pr audit
+  - audit T3MP3ST PR
+  - review T3MP3ST pull request
+  - maintainer audit PR
+requires:
+  - pr-number: one pull request number or URL
+  - github: elder-plinius/T3MP3ST tracker access
+ensures:
+  - current-head-reviewed: audit records the exact PR head SHA
+  - local-or-ci-verification: relevant tests and CI status are recorded
+  - maintainer-decision: approve, request changes, comment, or hold
+commandHint:
+  argumentHint: "<pr-number-or-url> [--post-review] [--no-post]"
+  allowedTools: Bash, Read, Grep
+  model: sonnet
+  category: code-review
+---
+
+# T3MP3ST PR Audit
+
+Use this for a single pull request before approval or merge.
+
+## Required Context
+
+1. Read PR metadata and current head SHA.
+2. Read PR body, linked issues, comments, and reviews.
+3. Fetch or check out the exact head.
+4. Inspect the diff against `upstream/main`.
+5. Identify changed ownership surfaces:
+   - `src/server.ts`, `docs/index.html`, auth/origin/proxy/provider code,
+     `src/llm/`, `src/agent/`, `src/arsenal/`, scripts, CI, installer/docs.
+
+## Review Checklist
+
+- Behavioral correctness: does the implementation satisfy the issue or PR claim?
+- Security: no broadened auth/origin/scope/tool execution boundary without a gate.
+- Local model/keyless paths: local, local-agent, codex, hosted-provider behavior
+  remain distinct.
+- UI/backend contract: browser payloads match server route expectations.
+- Tests: regression tests match the failure mode and are not only static if runtime
+  behavior changed.
+- Docs: setup or operator behavior changes are documented where users see them.
+- Merge readiness: current head is clean/mergeable and CI is green or equivalent
+  local verification exists.
+
+## Recommended Verification
+
+Use the smallest meaningful set, then broaden for shared/high-risk code:
+
+```bash
+npm run typecheck
+npm test
+npm run lint
+```
+
+For targeted changes, run focused tests first but remember this repo's test script
+currently runs `vitest run src`.
+
+## Review Decision
+
+- Approve only when the current head SHA is verified.
+- Request changes for correctness/security/test gaps.
+- Comment without approval when the PR is promising but stale or missing evidence.
+- For maintainer-owned PRs, prefer merging after CI green rather than self-approval
+  theater; record the evidence in the merge plan.
+
+## Output
+
+Lead with findings. If none:
+
+```markdown
+Reviewed PR #N at `<sha>`.
+
+No blocking findings.
+
+Verification:
+- <commands/checks>
+
+Residual risk:
+- <if any>
+```
