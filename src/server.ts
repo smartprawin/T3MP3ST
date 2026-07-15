@@ -4322,7 +4322,7 @@ function healthPayload(): Record<string, unknown> {
     version: '0.2.1',
     apiVersion: 'v1',
     llm: {
-      configured: Boolean(llmConfig.apiKey) || llmConfig.provider === 'codex',
+      configured: Boolean(llmConfig.apiKey) || providerRunsKeyless(llmConfig.provider),
       connected: Boolean(llm) || llmConfig.provider === 'codex',
       provider: llmConfig.provider,
       model: llmConfig.model,
@@ -5953,7 +5953,8 @@ app.get('/api/llm/status', (_req: Request, res: Response) => {
     connected: !!llm,
     provider: llmConfig.provider,
     model: llmConfig.model,
-    hasApiKey: !!llmConfig.apiKey
+    hasApiKey: !!llmConfig.apiKey,
+    configured: Boolean(llmConfig.apiKey) || providerRunsKeyless(llmConfig.provider),
   });
 });
 
@@ -6045,8 +6046,8 @@ app.post('/api/mission/start', async (req: Request, res: Response): Promise<void
     targets = [],
     operators = [],
     apiKey,
-    provider = 'openrouter',
-    model = 'anthropic/claude-sonnet-4',
+    provider,
+    model,
     // OPTIONAL white-box source: an absolute path to a LOCAL repo you own. When
     // present, we ingest + security-rank it and hand the packed source to the
     // command via setWhiteboxSource BEFORE start(), so operators reason over the
@@ -6054,18 +6055,19 @@ app.post('/api/mission/start', async (req: Request, res: Response): Promise<void
     repoPath,
   } = req.body;
 
-  // Use provided apiKey or fall back to server-configured one. Local-agent backends
-  // (Claude Code / Codex / Hermes) need NO key — the agent uses its own login.
+  // Use the request-selected backend, or fall back to the server's configured default.
+  // Local/local-agent backends need no hosted API key.
   // SECURITY NOTE: apiKey is read from the request body (Authorization header is
   // preferred). Kept body-accepted for the same-origin UI; only reachable from
   // the local operator (loopback bind + origin guard). Header move is out of scope.
-  const effectiveKey = apiKey || config.getLLMConfig().apiKey;
-  if (providerNeedsApiKey(provider) && !effectiveKey) {
+  const missionLLMConfig = resolveGeneralLLMConfig(provider, model, apiKey);
+  const effectiveKey = missionLLMConfig.apiKey;
+  if (providerNeedsApiKey(missionLLMConfig.provider) && !effectiveKey) {
     res.status(400).json({ error: 'API key required — pass apiKey, configure one on the server, or connect a local agent (Claude Code / Codex / Hermes)' });
     return;
   }
-  if (provider === 'local-agent') {
-    const localAgent = await requireLiveLocalAgent(model);
+  if (missionLLMConfig.provider === 'local-agent') {
+    const localAgent = await requireLiveLocalAgent(missionLLMConfig.model);
     if (!localAgent.ok) {
       res.status(503).json({ error: localAgent.error });
       return;
@@ -6101,7 +6103,7 @@ app.post('/api/mission/start', async (req: Request, res: Response): Promise<void
   }
 
   try {
-    const cmd = createTempestCommandInstance(name, effectiveKey, provider, model);
+    const cmd = createTempestCommandInstance(name, effectiveKey, missionLLMConfig.provider, missionLLMConfig.model);
 
     // Add targets
     for (const t of targets) {
@@ -6560,6 +6562,10 @@ function providerNeedsApiKey(provider: string): boolean {
   return !['codex', 'mock', 'local', 'local-agent'].includes(provider);
 }
 
+function providerRunsKeyless(provider: string): boolean {
+  return !providerNeedsApiKey(provider);
+}
+
 function readPositiveTimeoutEnv(name: string): number | undefined {
   const raw = process.env[name];
   if (raw == null || raw.trim() === '') return undefined;
@@ -6578,7 +6584,7 @@ function readGeneralTimeoutEnv(): number | undefined {
 // the key in the body, so we accept it to avoid breaking it. Moving to a header
 // needs a coordinated UI change and is out of scope. The body key is only ever
 // reachable from the local operator (loopback bind + origin guard).
-function resolveGeneralLLMConfig(provider: string, model: string | undefined, apiKey: string | undefined): {
+function resolveGeneralLLMConfig(provider: string | undefined, model: string | undefined, apiKey: string | undefined): {
   provider: any;
   model: string;
   apiKey?: string;
@@ -6586,7 +6592,8 @@ function resolveGeneralLLMConfig(provider: string, model: string | undefined, ap
   temperature: number;
   timeout: number;
 } {
-  const selectedProvider = provider || 'openrouter';
+  const defaultConfig = config.getLLMConfig();
+  const selectedProvider = provider || defaultConfig.provider;
   // Local-agent backends (Claude Code / Codex / Hermes via the connector) need NO API key — the
   // agent uses its own login. The agent id (codex|claude|hermes) travels in `model`.
   if (selectedProvider === 'local-agent') {
@@ -6779,8 +6786,8 @@ app.post('/api/general/plan', async (req: Request, res: Response): Promise<void>
     urgency,
     opsecPreference,
     apiKey,
-    provider = 'openrouter',
-    model = 'anthropic/claude-sonnet-4',
+    provider,
+    model,
   } = req.body;
 
   if (!objective) {
@@ -6853,8 +6860,8 @@ app.post('/api/general/execute', async (req: Request, res: Response): Promise<vo
 
   const {
     apiKey,
-    provider = 'openrouter',
-    model = 'anthropic/claude-sonnet-4',
+    provider,
+    model,
   } = req.body;
 
   let generalConfig;
@@ -6966,8 +6973,8 @@ app.post('/api/general/auto', async (req: Request, res: Response): Promise<void>
     urgency,
     opsecPreference,
     apiKey,
-    provider = 'openrouter',
-    model = 'anthropic/claude-sonnet-4',
+    provider,
+    model,
   } = req.body;
 
   if (!objective) {
@@ -7225,7 +7232,7 @@ import { Admiral, briefToDirective, type ChatMsg, type MissionBrief } from './ad
  */
 app.post('/api/admiral/converse', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { messages, provider = 'openrouter', model, apiKey } = req.body as {
+    const { messages, provider, model, apiKey } = req.body as {
       messages: ChatMsg[]; provider?: string; model?: string; apiKey?: string;
     };
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -7255,7 +7262,7 @@ app.post('/api/admiral/converse', async (req: Request, res: Response): Promise<v
  */
 app.post('/api/admiral/suggest', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { operatorPrompt, archetype, failureSignal, provider = 'openrouter', model, apiKey } = req.body as {
+    const { operatorPrompt, archetype, failureSignal, provider, model, apiKey } = req.body as {
       operatorPrompt?: string; archetype?: string; failureSignal?: string; provider?: string; model?: string; apiKey?: string;
     };
     let prompt = typeof operatorPrompt === 'string' ? operatorPrompt : '';
@@ -7290,7 +7297,7 @@ app.post('/api/admiral/suggest', async (req: Request, res: Response): Promise<vo
  */
 app.post('/api/admiral/launch', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { brief, confirmed, provider = 'openrouter', model, apiKey } = req.body as {
+    const { brief, confirmed, provider, model, apiKey } = req.body as {
       brief: MissionBrief; confirmed?: boolean; provider?: string; model?: string; apiKey?: string;
     };
     if (!brief || !brief.objective || !brief.target) {
