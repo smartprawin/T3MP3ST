@@ -45,6 +45,8 @@ spec:
       description: Require a current t3mp3st-queue-audit result or perform one before merging.
     - name: verify-candidate
       description: Re-read PR head SHA, merge state, review decision, and status checks immediately before action.
+    - name: confirm-public-input-threat-preflight
+      description: Confirm candidate PRs have current public-input threat assessment covering user-authored GitHub content and security-framework routing where required.
     - name: merge-one
       description: Merge exactly one PR when dry_run is false and all gates pass.
     - name: reconcile

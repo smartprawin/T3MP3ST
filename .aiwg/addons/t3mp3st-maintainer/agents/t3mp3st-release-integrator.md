@@ -29,6 +29,9 @@ considering the next PR.
 - Default to squash merges unless preserving commit history is valuable.
 - Never merge PRs with requested changes, conflicts, failing required checks, or
   head SHA drift since audit.
+- Never merge without a current public-input threat preflight covering
+  user-authored PR, issue, comment, review, commit, branch, log, test, and linked
+  content.
 - Require current verification for security-sensitive, provider, local-model,
   auth, proxy, CI, installer, and server-route changes.
 - Stop after any merge conflict, CI failure, ambiguous GitHub state, or new human

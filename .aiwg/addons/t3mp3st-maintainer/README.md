@@ -63,6 +63,8 @@ Use it when:
   reconciliation, and next candidate.
 - `maintainer-action-items.md` — owner/action/blocker/follow-up list for user
   communication and handoff.
+- `public-input-threat-assessment.md` — hostile public-input preflight for
+  issues, PRs, comments, reviews, and other user-authored repo content.
 
 ## Usage
 

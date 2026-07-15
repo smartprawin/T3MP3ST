@@ -18,6 +18,13 @@ Class: `<support-answer | bug-address | feature-track | security-contact | linke
 
 - `<issue body/comment/code/PR evidence>`
 
+## Public Input Threat Assessment
+
+- Assessment file/template: `public-input-threat-assessment.md`
+- Risk: `<low/medium/high>`
+- Security-framework routing used: `<none | aiwg discover phrase/result>`
+- Notes: `<summary>`
+
 ## Recommended Action
 
 Action: `<comment | close | link PR | address-issues | feature-track | defer>`

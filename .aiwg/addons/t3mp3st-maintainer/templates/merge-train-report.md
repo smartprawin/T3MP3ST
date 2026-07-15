@@ -16,6 +16,7 @@ Method default: `<squash | merge | rebase>`
 - Local branch: `<branch>`
 - Main baseline: `<sha>`
 - GitHub auth: `<confirmed/not confirmed>`
+- Public-input threat preflight: `<confirmed for all candidates | missing for PR #>`
 
 ## Merged
 

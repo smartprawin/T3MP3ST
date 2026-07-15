@@ -53,14 +53,16 @@ Never merge:
 1. Re-read current PR state:
    - `gh pr view <N> --json headRefOid,mergeStateStatus,reviewDecision,statusCheckRollup`
 2. Compare head SHA to the audited SHA.
-3. Confirm checks are green.
-4. Confirm no unresolved requested changes.
-5. Merge exactly one PR.
-6. Wait for main/CI state if checks run after merge.
-7. Re-check linked issues:
+3. Confirm the latest PR audit included public-input threat preflight for
+   user-authored PR/issue/comment/review content.
+4. Confirm checks are green.
+5. Confirm no unresolved requested changes.
+6. Merge exactly one PR.
+7. Wait for main/CI state if checks run after merge.
+8. Re-check linked issues:
    - if auto-closed, record it;
    - if still open, comment or close only with clear evidence.
-8. Refresh open PR queue before the next merge.
+9. Refresh open PR queue before the next merge.
 
 ## Output
 
