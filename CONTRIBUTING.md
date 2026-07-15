@@ -56,6 +56,18 @@ npm run arsenal:smoke
 npm run field:drill
 ```
 
+Follow the full [Pull Request Delivery Guide](docs/PULL_REQUEST_DELIVERY.md)
+before requesting review. In particular, run:
+
+```bash
+git diff --name-status upstream/main...HEAD
+```
+
+The PR must stay scoped to its title. Do not include stale-base deletions,
+unrelated provider/config churn, benchmark fixture removals, provenance doc
+removals, or safety-test removals. If the branch has drifted, recreate it from
+current `main` and reapply only the intended change.
+
 ## Style
 
 - Prefer clear adapters and evidence contracts over clever hidden behavior.

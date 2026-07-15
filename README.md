@@ -172,6 +172,7 @@ Deeper reading: [WALL_FORENSICS](docs/WALL_FORENSICS.md) (per-challenge misses),
 | [TEAM_PREVIEW](docs/TEAM_PREVIEW.md) | first-run path and review script |
 | [INSTALL_MATRIX](docs/INSTALL_MATRIX.md) | macOS / Linux readiness table |
 | [ARSENAL_ACTIVATION_PLAN](docs/ARSENAL_ACTIVATION_PLAN.md) | optional external-tool setup |
+| [PULL_REQUEST_DELIVERY](docs/PULL_REQUEST_DELIVERY.md) | contributor and maintainer checklist for scoped, reviewable PRs |
 | [CYBENCH](docs/CYBENCH.md) · [WALL_FORENSICS](docs/WALL_FORENSICS.md) · [INTEGRITY_LEDGER](docs/INTEGRITY_LEDGER.md) · [COGNITIVE_ARCHITECTURE](docs/COGNITIVE_ARCHITECTURE.md) | benchmark methodology |
 | [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md) | the gates a release must pass |
 
