@@ -126,7 +126,17 @@ const SPECS: AgentSpec[] = [
     versionArgs: ['--version'],
     parseVersion: (o) => (o.match(/[\d]+\.[\d]+(\.[\d]+)?/) || ['?'])[0],
     authArtifacts: ['~/.codex/auth.json', '~/.config/codex/auth.json'],
-    oneShot: (p, m) => ['exec', ...(m ? ['-m', m] : []), p],
+    oneShot: (p, m) => [
+      'exec',
+      '--ephemeral',
+      '--skip-git-repo-check',
+      '--sandbox',
+      'read-only',
+      '--color',
+      'never',
+      ...(m ? ['-m', m] : []),
+      p,
+    ],
   },
   {
     id: 'hermes',
@@ -322,7 +332,7 @@ export function localAgentChat(id: string, prompt: string, opts: { model?: strin
   } else if (id === 'codex') {
     workDir = mkdtempSync(join(tmpdir(), 't3mp3st-codexllm-'));
     outFile = join(workDir, 'reply.txt');
-    args = ['exec', '--skip-git-repo-check', '--color', 'never', '--sandbox', 'read-only', '--output-last-message', outFile, ...(model ? ['-m', model] : [])];
+    args = ['exec', '--ephemeral', '--skip-git-repo-check', '--color', 'never', '--sandbox', 'read-only', '--output-last-message', outFile, ...(model ? ['-m', model] : [])];
   } else { // hermes — takes the prompt as an arg
     args = ['-z', prompt, ...(hermesYoloEnabled() ? ['--yolo'] : []), ...(model ? ['-m', model] : [])];
     viaStdin = false;

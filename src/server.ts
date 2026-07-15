@@ -6654,8 +6654,6 @@ function bringUpMissionFromPlan(
 async function runCodexExecReadinessProbe(command: string): Promise<{ stdout: string; stderr: string }> {
   const marker = 'T3MP3ST_CODEX_READY';
   const args = [
-    '--ask-for-approval',
-    'never',
     'exec',
     '-c',
     'model_reasoning_effort="low"',
@@ -6681,7 +6679,7 @@ async function runCodexExecReadinessProbe(command: string): Promise<{ stdout: st
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
       reject(new Error('Codex exec readiness probe timed out'));
-    }, 30000);
+    }, 60000);
 
     // Bounded accumulation so a runaway/verbose child can't grow these strings without limit
     // before the 30s timer fires (matches the local-agent caps). A normal probe emits a tiny
@@ -6733,7 +6731,7 @@ app.get('/api/codex/status', async (_req: Request, res: Response): Promise<void>
       tokenHandling: 'no token is accepted by or returned from T3MP3ST',
       command,
       version: stdout.trim(),
-      executionMode: 'codex exec --ephemeral --sandbox read-only --ask-for-approval never',
+      executionMode: 'codex exec --ephemeral --sandbox read-only',
       execProbe: 'POST /api/codex/probe',   // exec self-test moved off GET (B-04)
     });
   } catch (error: any) {
@@ -6753,7 +6751,7 @@ app.post('/api/codex/probe', async (_req: Request, res: Response): Promise<void>
       provider: 'codex',
       command,
       version: stdout.trim(),
-      executionMode: 'codex exec --ephemeral --sandbox read-only --ask-for-approval never',
+      executionMode: 'codex exec --ephemeral --sandbox read-only',
     };
     try {
       const probe = await runCodexExecReadinessProbe(command);
@@ -7472,7 +7470,7 @@ type ConnectedLocalAgent = {
 };
 const connectedLocalAgents = new Map<string, ConnectedLocalAgent>();
 const LOCAL_AGENT_HEALTH_TTL_MS = 30_000;
-const LOCAL_AGENT_HEALTH_TIMEOUT_MS = 15_000;
+const LOCAL_AGENT_HEALTH_TIMEOUT_MS = 45_000;
 
 async function refreshConnectedLocalAgentHealth(force = false): Promise<void> {
   const now = Date.now();
