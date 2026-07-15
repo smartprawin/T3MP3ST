@@ -57,11 +57,9 @@ bench/nyu/
 scripts/.export-denylist.local
 
 # --- project-local AIWG bundle source ---
-# Keep runtime/generated AIWG workspace state local, but allow maintainable
-# project-local bundles to be reviewed and versioned.
+# Keep runtime/generated AIWG workspace state local. Only project-local addon
+# source is publishable.
 !.aiwg/
 .aiwg/*
 !.aiwg/addons/
-.aiwg/addons/*
-!.aiwg/addons/t3mp3st-maintainer/
-!.aiwg/addons/t3mp3st-maintainer/**
+!.aiwg/addons/**
