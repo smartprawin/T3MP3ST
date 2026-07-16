@@ -607,6 +607,7 @@ interface ApprovalRequest {
   target: string;
   reason: string;
   status: ApprovalStatus;
+  wildcardOptIn?: boolean;
   operationId?: string;
   requestedBy: DraftSource | 'system';
   createdAt: string;
@@ -1191,10 +1192,29 @@ function approvalIsFresh(approval: ApprovalRequest): boolean {
   return Date.parse(approval.expiresAt) > Date.now();
 }
 
+function targetUsesWildcard(target: string): boolean {
+  const raw = normalizeTargetValue(target).toLowerCase();
+  if (raw === '*') return true;
+  const withoutScheme = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
+  return withoutScheme.startsWith('*.') || hostFromTarget(raw).startsWith('*.');
+}
+
+function wildcardHostFromTarget(target: string): string {
+  const raw = normalizeTargetValue(target).toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
+  return raw.replace(/\/.*$/, '').replace(/:\d+$/, '');
+}
+
 function approvalMatches(approval: ApprovalRequest, action: GuardAction, target: string): boolean {
   if (approval.action !== action) return false;
   if (approval.target === '*') return action === 'model_call' || action === 'autonomous_execution';
-  return hostFromTarget(approval.target) === hostFromTarget(target);
+  if (targetUsesWildcard(approval.target) && !approval.wildcardOptIn) return false;
+  const approvalHost = targetUsesWildcard(approval.target) ? wildcardHostFromTarget(approval.target) : hostFromTarget(approval.target);
+  const targetHost = hostFromTarget(target);
+  if (approvalHost.startsWith('*.')) {
+    const suffix = approvalHost.slice(1);
+    return targetHost.endsWith(suffix) && targetHost !== approvalHost.slice(2);
+  }
+  return approvalHost === targetHost;
 }
 
 function ensureExecTargetsWithinApprovedTarget(targets: string[], approvedTarget: string): string[] {
@@ -1204,6 +1224,15 @@ function ensureExecTargetsWithinApprovedTarget(targets: string[], approvedTarget
     .filter(target => hostFromTarget(target) !== approvedHost);
 }
 
+function ensureExecTargetsAuthorized(
+  targets: string[],
+  approvedTarget: string,
+  body: Record<string, unknown>,
+): string[] {
+  return ensureExecTargetsWithinApprovedTarget(targets, approvedTarget)
+    .filter(target => !findApproval(body, 'autonomous_execution', target));
+}
+
 function approvalMatchesGateScope(approval: ApprovalRequest, action: GuardAction, operationId: string, target: string): boolean {
   if (!approvalMatches(approval, action, target)) return false;
   if (approval.operationId && operationId && approval.operationId !== operationId) return false;
@@ -1211,10 +1240,17 @@ function approvalMatchesGateScope(approval: ApprovalRequest, action: GuardAction
 }
 
 function findApproval(body: Record<string, unknown>, action: GuardAction, target: string): ApprovalRequest | null {
-  const id = typeof body.approvalId === 'string' ? body.approvalId : '';
-  const approval = id ? approvalRequests.get(id) : undefined;
-  if (!approval || !approvalIsFresh(approval) || !approvalMatches(approval, action, target)) return null;
-  return approval;
+  const ids = [
+    typeof body.approvalId === 'string' ? body.approvalId : '',
+    ...(Array.isArray(body.approvalIds) ? body.approvalIds.filter((id): id is string => typeof id === 'string') : []),
+  ].filter(Boolean);
+
+  for (const id of ids) {
+    const approval = approvalRequests.get(id);
+    if (approval && approvalIsFresh(approval) && approvalMatches(approval, action, target)) return approval;
+  }
+
+  return null;
 }
 
 function createApprovalRequest(action: GuardAction, target: string, reason: string, body: Record<string, unknown>): ApprovalRequest {
@@ -1225,6 +1261,7 @@ function createApprovalRequest(action: GuardAction, target: string, reason: stri
     target,
     reason,
     status: 'pending',
+    wildcardOptIn: body.allowWildcard === true && targetUsesWildcard(target),
     operationId: typeof operationDraft?.operation_id === 'string' ? operationDraft.operation_id : undefined,
     requestedBy: ['human', 'agent', 't3mp3st'].includes(String(body.source)) ? body.source as DraftSource : 'system',
     createdAt: nowIso(),
@@ -4905,6 +4942,15 @@ app.post('/api/approvals/request', (req: Request, res: Response) => {
     });
     return;
   }
+  if (targetUsesWildcard(target) && target !== '*' && body.allowWildcard !== true) {
+    res.status(400).json({
+      error: 'Wildcard host approval requires explicit opt-in',
+      action,
+      target,
+      next: 'Send allowWildcard:true only when the operator intentionally approves the whole subdomain wildcard.',
+    });
+    return;
+  }
   const reason = typeof body.reason === 'string' && body.reason.trim()
     ? body.reason.trim()
     : `Approval requested for ${action} against ${target}`;
@@ -4926,6 +4972,68 @@ app.post('/api/approvals/:id/approve', (req: Request, res: Response) => {
   approval.updatedAt = nowIso();
   emitContractEvent('approval.approved', { approvalId: approval.id, action: approval.action, target: approval.target });
   res.json(approval);
+});
+
+app.post('/api/approvals/authorize-target', (req: Request, res: Response) => {
+  const body = req.body as Record<string, unknown>;
+  const target = normalizeTargetValue(body.target);
+  const approvalIds = [
+    typeof body.approvalId === 'string' ? body.approvalId : '',
+    ...(Array.isArray(body.approvalIds) ? body.approvalIds.filter((id): id is string => typeof id === 'string') : []),
+  ].filter(Boolean);
+  if (!approvalIds.length) {
+    res.status(400).json({
+      error: 'approvalId or approvalIds required',
+      next: 'Request a pending receipt first, then approve that exact receipt id.',
+    });
+    return;
+  }
+  if (target === '*') {
+    res.status(400).json({
+      error: 'Wildcard target authorization is not allowed for active actions',
+      next: 'Authorize one concrete host or URL so receipts remain target-scoped.',
+    });
+    return;
+  }
+  if (targetUsesWildcard(target) && target !== '*' && body.allowWildcard !== true) {
+    res.status(400).json({
+      error: 'Wildcard host authorization requires explicit opt-in',
+      next: 'Send allowWildcard:true only when the operator intentionally approves the whole subdomain wildcard.',
+    });
+    return;
+  }
+
+  const ttlMinutes = Math.max(1, Math.min(30, Number(body.ttlMinutes || 30)));
+  const expiresAt = new Date(Date.now() + ttlMinutes * 60_000).toISOString();
+  const approvals: ApprovalRequest[] = [];
+  for (const id of [...new Set(approvalIds)]) {
+    const approval = approvalRequests.get(id);
+    if (!approval) {
+      res.status(404).json({ error: 'Approval request not found', approvalId: id });
+      return;
+    }
+    if (approval.status !== 'pending') {
+      res.status(409).json({ error: 'Approval request is not pending', approvalId: id, status: approval.status });
+      return;
+    }
+    if (target && !approvalMatches(approval, approval.action, target)) {
+      res.status(400).json({
+        error: 'Approval target mismatch',
+        approvalId: id,
+        approvalTarget: approval.target,
+        target,
+      });
+      return;
+    }
+    approval.status = 'approved';
+    approval.approvedBy = typeof body.approvedBy === 'string' ? body.approvedBy : 'local-operator';
+    approval.expiresAt = expiresAt;
+    approval.updatedAt = nowIso();
+    emitContractEvent('approval.approved', { approvalId: approval.id, action: approval.action, target: approval.target });
+    approvals.push(approval);
+  }
+
+  res.json({ target: target || null, expiresAt, approvals });
 });
 
 app.post('/api/approvals/:id/reject', (req: Request, res: Response) => {
@@ -6104,6 +6212,14 @@ app.post('/api/mission/start', async (req: Request, res: Response): Promise<void
     const targetValue = normalizeTargetValue(target);
     const guard = guardAction(req.body as Record<string, unknown>, 'mission_execution', targetValue, `Start mission ${name} against ${targetValue}`);
     if (!guard.allowed) { blockForApproval(res, guard); return; }
+  }
+
+  if (provider === 'local-agent') {
+    const localAgent = await requireLiveLocalAgent(model);
+    if (!localAgent.ok) {
+      res.status(503).json({ error: localAgent.error });
+      return;
+    }
   }
 
   // B-03: if an OPTIONAL white-box repoPath was supplied, containment-check it HERE
@@ -7373,12 +7489,20 @@ app.post('/api/admiral/launch', async (req: Request, res: Response): Promise<voi
       res.status(409).json({ error: 'General plan gate is HOLD', mode: 'live', plan, review: execConfig.review });
       return;
     }
-    const outOfScopeTargets = ensureExecTargetsWithinApprovedTarget(execConfig.targets, brief.target);
+    const outOfScopeTargets = ensureExecTargetsAuthorized(execConfig.targets, brief.target, req.body as Record<string, unknown>);
     if (outOfScopeTargets.length) {
+      const approvals = outOfScopeTargets.map(target => createApprovalRequest(
+        'autonomous_execution',
+        target,
+        `Admiral plan expanded execution scope from ${brief.target} to ${target}`,
+        req.body as Record<string, unknown>
+      ));
       res.status(403).json({
-        error: 'Admiral LIVE plan contains targets outside the approved brief target',
+        error: 'Admiral LIVE plan needs approval for expanded target scope',
         approvedTarget: brief.target,
         outOfScopeTargets,
+        approvals,
+        next: 'Approve the expanded target receipts, then retry /api/admiral/launch with approvalIds.',
       });
       return;
     }

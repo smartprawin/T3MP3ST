@@ -3390,6 +3390,10 @@
                 <div class="nav-item" data-page="live-scan">
                     <span class="icon">📡</span> Live Scan
                 </div>
+                <div class="nav-item" data-page="receipts">
+                    <span class="icon">🧾</span> Scope Receipts
+                    <span class="badge" id="pendingReceiptCount">0</span>
+                </div>
                 <div class="nav-item" data-page="operators">
                     <span class="icon">🤖</span> Operatives
                     <span class="badge" id="activeOperatorCount">0</span>
@@ -3711,6 +3715,10 @@
                                     <button type="button" onclick="runPlinyFieldDrill()">Drill</button>
                                     <button type="button" onclick="navigateTo('ctf-range')">Range</button>
                                 </div>
+                            </section>
+                            <section class="hunt-panel">
+                                <div class="ops-card-title"><span>Scope Receipts</span><span id="scopeReceiptCount">0 pending</span></div>
+                                <div id="scopeReceiptFeed" style="max-height:180px;overflow-y:auto;font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.55;"><span style="color:#5a5f67;font-size:10.5px;">No pending scope receipts.</span></div>
                             </section>
                         </div>
                     </div>
@@ -4300,6 +4308,28 @@
                             <div id="liveScanFeedCount" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);">0 events</div>
                         </div>
                         <div id="liveScanFeed" style="height:min(48vh,520px);min-height:300px;overflow:auto;font-family:'JetBrains Mono',monospace;background:rgba(0,0,0,0.18);"></div>
+                    </section>
+                </div>
+
+                <!-- Scope Receipts - explicit approvals for external/live execution -->
+                <div class="page" id="page-receipts">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:18px;flex-wrap:wrap;">
+                        <div>
+                            <div style="font-size:10px;color:var(--accent);text-transform:uppercase;letter-spacing:2px;margin-bottom:6px;">ScopeGuard</div>
+                            <div style="font-size:24px;font-weight:800;color:var(--text-primary);line-height:1.15;">Scope Receipts</div>
+                        </div>
+                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                            <button class="btn btn-secondary btn-sm" onclick="refreshReceiptsPage()">Refresh</button>
+                            <button class="btn btn-secondary btn-sm" onclick="approveAllPendingReceipts()">Approve Pending</button>
+                        </div>
+                    </div>
+                    <div id="receiptsSummary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:14px;"></div>
+                    <section style="background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:8px;overflow:hidden;">
+                        <div style="padding:12px 14px;border-bottom:1px solid var(--border-color);display:flex;justify-content:space-between;align-items:center;gap:10px;">
+                            <div style="font-size:11px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:1px;">Approval Requests</div>
+                            <div id="receiptsCount" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);">0 receipts</div>
+                        </div>
+                        <div id="receiptsList" style="max-height:min(62vh,680px);overflow:auto;"></div>
                     </section>
                 </div>
 
@@ -6022,11 +6052,17 @@ tempest.operators.<span class="function">spawn</span>(<span class="string">'scan
                     this._eventSource.addEventListener('connected', () => {
                         console.log('[BackendDispatch] SSE connected');
                         try { fetchToolApprovals(); } catch {}
+                        try { fetchScopeReceipts(); } catch {}
                     });
 
                     // Capability-approval gate: every gated tool decision (allow/deny) + spicy warning.
                     this._eventSource.addEventListener('arsenal.approval', (e) => {
                         try { pushApprovalAuditEvent(JSON.parse(e.data)); } catch {}
+                    });
+                    ['approval.requested', 'approval.approved', 'approval.rejected'].forEach((eventName) => {
+                        this._eventSource.addEventListener(eventName, () => {
+                            try { fetchScopeReceipts(); } catch {}
+                        });
                     });
 
                     this._eventSource.addEventListener('operator:spawned', (e) => {
@@ -7238,14 +7274,115 @@ Correlating findings across agents, identifying patterns, producing actionable i
             }
         }, 3000);
 
+        const ReceiptsState = { approvals: [] };
+
+        function receiptStatusColor(status) {
+            const s = String(status || '').toLowerCase();
+            if (s === 'approved') return '#00ff88';
+            if (s === 'pending') return '#ffaa00';
+            if (s === 'rejected' || s === 'expired') return '#ff6666';
+            return 'var(--text-secondary)';
+        }
+
+        window.refreshReceiptsPage = async function refreshReceiptsPage() {
+            const data = await T3MP3ST_API.get('/api/approvals');
+            ReceiptsState.approvals = Array.isArray(data.approvals) ? data.approvals : [];
+            renderReceiptsPage();
+        };
+
+        window.approveReceipt = async function approveReceipt(id) {
+            const receipt = ReceiptsState.approvals.find(function(a){ return a.id === id; });
+            await T3MP3ST_API.post('/api/approvals/' + id + '/approve', {});
+            await window.refreshReceiptsPage();
+            if (window.toast) toast('Receipt approved: ' + id, 'success');
+            if (receipt?.action === 'autonomous_execution' && window.__t3mpAdmiralPendingRetry && typeof window.retryPendingAdmiralLaunch === 'function') {
+                window.retryPendingAdmiralLaunch();
+            }
+        };
+
+        window.rejectReceipt = async function rejectReceipt(id) {
+            await T3MP3ST_API.post('/api/approvals/' + id + '/reject', {});
+            await window.refreshReceiptsPage();
+            if (window.toast) toast('Receipt rejected: ' + id, 'warning');
+        };
+
+        window.approveAllPendingReceipts = async function approveAllPendingReceipts() {
+            const pending = ReceiptsState.approvals.filter(function(a){ return a.status === 'pending'; });
+            await Promise.all(pending.map(function(a){ return T3MP3ST_API.post('/api/approvals/' + a.id + '/approve', {}); }));
+            await window.refreshReceiptsPage();
+            if (window.toast) toast('Approved ' + pending.length + ' pending receipt(s)', pending.length ? 'success' : 'info');
+            if (pending.some(function(a){ return a.action === 'autonomous_execution'; }) && window.__t3mpAdmiralPendingRetry && typeof window.retryPendingAdmiralLaunch === 'function') {
+                window.retryPendingAdmiralLaunch();
+            }
+        };
+
+        function renderReceiptsPage() {
+            const approvals = ReceiptsState.approvals || [];
+            const pending = approvals.filter(function(a){ return a.status === 'pending'; }).length;
+            const approved = approvals.filter(function(a){ return a.status === 'approved'; }).length;
+            const closed = approvals.filter(function(a){ return a.status === 'expired' || a.status === 'rejected'; }).length;
+            const badge = document.getElementById('pendingReceiptCount');
+            if (badge) {
+                badge.textContent = String(pending);
+                badge.style.background = pending ? '#ffaa00' : 'rgba(255,255,255,0.12)';
+                badge.style.color = pending ? '#1b1200' : '';
+            }
+            const summary = document.getElementById('receiptsSummary');
+            if (summary) {
+                const cells = [
+                    ['Pending', pending, pending ? '#ffaa00' : 'var(--text-secondary)'],
+                    ['Approved', approved, '#00ff88'],
+                    ['Closed', closed, closed ? '#ff6666' : 'var(--text-secondary)'],
+                    ['Total', approvals.length, '#00aaff']
+                ];
+                summary.innerHTML = cells.map(function(cell){
+                    return '<div style="background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:8px;padding:12px;min-height:74px;">'
+                        + '<div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">' + escapeHtml(cell[0]) + '</div>'
+                        + '<div style="font-family:&quot;JetBrains Mono&quot;,monospace;font-size:18px;color:' + cell[2] + ';">' + escapeHtml(cell[1]) + '</div>'
+                        + '</div>';
+                }).join('');
+            }
+            const count = document.getElementById('receiptsCount');
+            if (count) count.textContent = approvals.length + ' receipts';
+            const list = document.getElementById('receiptsList');
+            if (!list) return;
+            if (!approvals.length) {
+                list.innerHTML = '<div style="padding:18px;color:var(--text-muted);font-size:12px;">No receipts yet. Live external actions will create target-scoped approval requests here.</div>';
+                return;
+            }
+            list.innerHTML = approvals.map(function(a){
+                const color = receiptStatusColor(a.status);
+                const pendingActions = a.status === 'pending'
+                    ? '<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;"><button class="btn btn-primary btn-sm" onclick="approveReceipt(&quot;' + escapeHtml(a.id) + '&quot;)">Approve</button><button class="btn btn-secondary btn-sm" onclick="rejectReceipt(&quot;' + escapeHtml(a.id) + '&quot;)">Reject</button></div>'
+                    : '';
+                return '<div style="padding:12px 14px;border-bottom:1px solid rgba(255,255,255,0.06);display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start;">'
+                    + '<div style="min-width:0;">'
+                    + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;"><span style="font-family:&quot;JetBrains Mono&quot;,monospace;font-size:10px;color:var(--text-muted);">' + escapeHtml(a.id) + '</span><span style="font-family:&quot;JetBrains Mono&quot;,monospace;font-size:10px;color:' + color + ';text-transform:uppercase;">' + escapeHtml(a.status || 'unknown') + '</span></div>'
+                    + '<div style="font-size:13px;color:var(--text-primary);font-weight:700;overflow-wrap:anywhere;">' + escapeHtml(a.target || '-') + '</div>'
+                    + '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + escapeHtml(a.action || '-') + ' · ' + escapeHtml(a.requestedBy || '-') + '</div>'
+                    + '<div style="font-size:11px;color:var(--text-secondary);margin-top:7px;line-height:1.45;overflow-wrap:anywhere;">' + escapeHtml(a.reason || '') + '</div>'
+                    + (a.expiresAt ? '<div style="font-size:10px;color:var(--text-muted);margin-top:7px;">Expires ' + escapeHtml(new Date(a.expiresAt).toLocaleString()) + '</div>' : '')
+                    + '</div>'
+                    + pendingActions
+                    + '</div>';
+            }).join('');
+        }
+
+        setInterval(() => {
+            if (document.getElementById('page-receipts')?.classList.contains('active')) {
+                window.refreshReceiptsPage?.();
+            }
+        }, 4000);
+
         // Navigation
         function navigateTo(page) {
             document.querySelectorAll('.nav-item').forEach(i => i.classList.toggle('active', i.dataset.page === page));
             document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === `page-${page}`));
-            const titles = { warroom: 'War Room', 'live-scan': 'Live Scan', operators: 'Operatives', evidence: 'Evidence Vault', arsenal: 'Arsenal', terminal: 'Terminal', benchmarks: 'Benchmarks', configs: 'Config Library', 'ctf-range': 'CTF Range', general: 'Op Admiral', selfimprove: 'Self-Improvement', settings: 'Settings', about: 'About' };
+            const titles = { warroom: 'War Room', 'live-scan': 'Live Scan', receipts: 'Scope Receipts', operators: 'Operatives', evidence: 'Evidence Vault', arsenal: 'Arsenal', terminal: 'Terminal', benchmarks: 'Benchmarks', configs: 'Config Library', 'ctf-range': 'CTF Range', general: 'Op Admiral', selfimprove: 'Self-Improvement', settings: 'Settings', about: 'About' };
             document.getElementById('pageTitle').textContent = titles[page] || 'War Room';
             document.getElementById('sidebar').classList.remove('open');
             if (page === 'live-scan') setTimeout(() => window.refreshLiveScanPage?.(), 50);
+            if (page === 'receipts') setTimeout(() => window.refreshReceiptsPage?.(), 50);
             if (page === 'operators' && typeof window.loadOperativesRoster === 'function') setTimeout(window.loadOperativesRoster, 80);
             if (page === 'evidence' && typeof window.hydrateFindings === 'function') setTimeout(window.hydrateFindings, 60);
             if (page === 'selfimprove' && typeof window.renderSelfImprove === 'function') setTimeout(window.renderSelfImprove, 60);
@@ -24647,6 +24784,59 @@ Be specific and actionable. Format as structured JSON.`;
                 if (data.audit.length) { feed.dataset.live = '1'; feed.innerHTML = ''; data.audit.slice(-40).forEach(rec => pushApprovalAuditEvent(rec, true)); }
             }
         }
+        async function fetchScopeReceipts() {
+            try {
+                if (!T3MP3ST_API.baseUrl) return;
+                const r = await fetch(`${T3MP3ST_API.baseUrl}/api/approvals`);
+                if (!r.ok) return;
+                const data = await r.json();
+                renderScopeReceipts(data.approvals || []);
+                ReceiptsState.approvals = Array.isArray(data.approvals) ? data.approvals : [];
+                renderReceiptsPage();
+            } catch (e) { /* offline — panel stays in its last known state */ }
+        }
+        function renderScopeReceipts(approvals) {
+            const feed = document.getElementById('scopeReceiptFeed');
+            const count = document.getElementById('scopeReceiptCount');
+            if (!feed) return;
+            const pending = (approvals || []).filter(a => a && a.status === 'pending');
+            const recent = (approvals || []).slice().sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))).slice(0, 12);
+            if (count) count.textContent = `${pending.length} pending`;
+            if (!recent.length) {
+                feed.innerHTML = '<span style="color:#5a5f67;font-size:10.5px;">No pending scope receipts.</span>';
+                return;
+            }
+            feed.innerHTML = recent.map(a => {
+                const color = receiptStatusColor(a.status);
+                const pendingActions = a.status === 'pending'
+                    ? `<div style="display:flex;gap:5px;margin-top:5px;"><button onclick="approveScopeReceipt('${escapeHtml(a.id)}')" style="padding:2px 7px;border:1px solid rgba(0,255,136,0.4);background:rgba(0,255,136,0.08);color:#00ff88;border-radius:4px;font-size:10px;cursor:pointer;">approve</button><button onclick="rejectScopeReceipt('${escapeHtml(a.id)}')" style="padding:2px 7px;border:1px solid rgba(255,102,102,0.4);background:rgba(255,102,102,0.08);color:#ff7777;border-radius:4px;font-size:10px;cursor:pointer;">reject</button></div>`
+                    : '';
+                return `<div style="padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
+                    <div style="display:flex;justify-content:space-between;gap:6px;"><span style="color:${color};text-transform:uppercase;">${escapeHtml(a.status || 'unknown')}</span><span style="color:#555;">${escapeHtml(a.id || '')}</span></div>
+                    <div style="color:#aab;font-size:10.5px;overflow-wrap:anywhere;">${escapeHtml(a.action || '')} · ${escapeHtml(a.target || '')}</div>
+                    <div style="color:#777;font-size:10px;line-height:1.35;overflow-wrap:anywhere;">${escapeHtml(a.reason || '')}</div>
+                    ${pendingActions}
+                </div>`;
+            }).join('');
+        }
+        window.approveScopeReceipt = async function approveScopeReceipt(id) {
+            try {
+                await T3MP3ST_API.post(`/api/approvals/${id}/approve`, { approvedBy: 'local-operator' });
+                try { addIntel('SCOPEGUARD', `Approved receipt ${id}`, 'success'); } catch (e) {}
+                await fetchScopeReceipts();
+            } catch (e) {
+                try { toast('Receipt approval failed', 'error'); } catch (err) {}
+            }
+        };
+        window.rejectScopeReceipt = async function rejectScopeReceipt(id) {
+            try {
+                await T3MP3ST_API.post(`/api/approvals/${id}/reject`, {});
+                try { addIntel('SCOPEGUARD', `Rejected receipt ${id}`, 'warning'); } catch (e) {}
+                await fetchScopeReceipts();
+            } catch (e) {
+                try { toast('Receipt rejection failed', 'error'); } catch (err) {}
+            }
+        };
         function pushApprovalAuditEvent(rec, silent) {
             const feed = document.getElementById('approvalAuditFeed');
             if (!feed || !rec) return;
@@ -24690,6 +24880,7 @@ Be specific and actionable. Format as structured JSON.`;
                 try { addMissionLog('info', `Approval receipt requested: ${approval.id}`); } catch (e) {}
                 try { addIntel('SCOPEGUARD', `Receipt ${approval.id} is ${approval.status}`, 'info'); } catch (e) {}
                 try { toast(`Receipt requested: ${approval.id}`, 'success'); } catch (e) {}
+                try { fetchScopeReceipts(); } catch (e) {}
             } catch (e) {
                 setOpsReady('approval', 'block', 'request failed');
                 try { addMissionLog('warning', `Approval receipt failed: ${e.message || e}`); } catch (err) {}
@@ -25529,6 +25720,18 @@ Be specific and actionable. Format as structured JSON.`;
     if (typeof updateSitRep === 'function') updateSitRep('reconnaissance', '⚓ Op Admiral is planning the ' + t.label + ' operation on ' + tgt + '…', 'ACTIVE');
     if (typeof addIntel === 'function') addIntel('ADMIRAL', '⚓ Brief handed to Op Admiral — planning ' + brief.family + ' on ' + tgt + ' (~30-90s)', 'info');
     if (window.toast) toast('⚓ Op Admiral is planning the operation…', 'info');
+    window.__t3mpAdmiralPendingRetry = false;
+    window.retryPendingAdmiralLaunch = function(){
+      if (!window.__t3mpAdmiralPendingRetry) return;
+      window.__t3mpAdmiralPendingRetry = false;
+      if (typeof addIntel === 'function') addIntel('SCOPEGUARD', 'Receipt approved — retrying Admiral launch', 'info');
+      if (window.toast) toast('Receipt approved — retrying Admiral launch', 'info');
+      setTimeout(function(){ window.admiralLaunch(); }, 50);
+    };
+    const admiralApiBase = (typeof getApiBase === 'function')
+      ? getApiBase()
+      : ((typeof T3MP3ST_API !== 'undefined' && T3MP3ST_API.baseUrl) || '');
+    const admiralFetch = function(path, opts){ return fetch(admiralApiBase + path, opts); };
     const body = function(extra){ return JSON.stringify(Object.assign({ brief: brief, confirmed: true }, bb, extra || {})); };
     // Op Admiral planning is a slow LLM call, and on success the SERVER brings up a LIVE
     // mission. The server budgets up to 300s for planning, so the client cap MUST exceed that
@@ -25538,18 +25741,31 @@ Be specific and actionable. Format as structured JSON.`;
     // cautious rather than declaring failure.
     const launchOpts = function(extra){ return { method:'POST', headers:{'Content-Type':'application/json'}, body: body(extra), signal: AbortSignal.timeout(330000) }; };
     try {
-      let res = await fetch('/api/admiral/launch', launchOpts());
+      let approvalIds = [];
+      let res = await admiralFetch('/api/admiral/launch', launchOpts());
       let d = await res.json();
-      // autonomous-execution approval receipt — auto-grant for loopback/lab or Autonomous mode, else require it.
-      // The server gates this with HTTP 403 (blockForApproval); the HOLD gate below is 409.
-      if (res.status === 403 && d.approval && d.approval.id) {
+      for (let approvalRound = 0; approvalRound < 5 && res.status === 403; approvalRound++) {
+        const requested = [];
+        if (d.approval && d.approval.id) requested.push(d.approval);
+        if (Array.isArray(d.approvals)) d.approvals.forEach(function(a){ if (a && a.id) requested.push(a); });
+        if (!requested.length) break;
+        const requestedIds = requested.map(function(a){ return a.id; }).filter(Boolean);
+        const targets = (d.outOfScopeTargets || requested.map(function(a){ return a.target; }).filter(Boolean)).join(', ');
         if (isLab || autonomous) {
-          await fetch('/api/approvals/' + d.approval.id + '/approve', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
-          res = await fetch('/api/admiral/launch', launchOpts({ approvalId: d.approval.id }));
+          await Promise.all(requestedIds.map(function(id){
+            return admiralFetch('/api/approvals/' + id + '/approve', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
+          }));
+          approvalIds = approvalIds.concat(requestedIds).filter(function(id, idx, arr){ return id && arr.indexOf(id) === idx; });
+          addIntel?.('SCOPEGUARD', 'Auto-approved ' + requestedIds.length + ' receipt(s): ' + (targets || requestedIds.join(', ')), 'success');
+          await window.refreshReceiptsPage?.();
+          res = await admiralFetch('/api/admiral/launch', launchOpts({ approvalIds: approvalIds }));
           d = await res.json();
-        } else {
-          throw new Error('Approval required for ' + tgt + ' — choose Autonomous mode, or approve in the receipts panel.');
+          continue;
         }
+        window.__t3mpAdmiralPendingRetry = true;
+        addIntel?.('SCOPEGUARD', 'Approval required: ' + (targets || tgt) + ' — open Scope Receipts', 'warning');
+        navigateTo?.('receipts');
+        throw new Error((d.error || 'Approval required') + ' — approve ' + (targets || 'pending targets') + ' in Scope Receipts; launch will retry after approval.');
       }
       if (res.status === 409 && d.review && d.review.status === 'hold') throw new Error('Op Admiral plan gate is HOLD — ' + ((d.review && d.review.reason) || 'manual review required before execution'));
       if (!res.ok || d.error) throw new Error(d.error || ('launch failed (' + res.status + ')'));
