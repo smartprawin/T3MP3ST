@@ -101,6 +101,33 @@ npm run verify-claims             # re-derives every headline from committed JSO
 
 Library/SDK usage, the full HTTP API, and MCP setup live in [docs/](docs/).
 
+### Docker
+
+Run T3MP3ST API server in a container (localhost only, not exposed externally):
+
+```bash
+cp .env.example .env       # configure API keys
+docker compose up -d       # API → http://localhost:3333
+docker compose logs -f     # view logs
+```
+
+**Security Note:** Container binds to `127.0.0.1:3333` - accessible only from localhost, not exposed to network.
+
+Test the API:
+```bash
+curl http://localhost:3333/api/health
+curl http://localhost:3333/api/bounty/platforms
+```
+
+Execute commands inside the container:
+
+```bash
+docker compose exec app npm run verify-claims
+docker compose exec app npm run cve:bench
+```
+
+Full deployment guide: [docs/DOCKER.md](docs/DOCKER.md).
+
 ## Updating from upstream
 
 If you installed from a release tarball or copied the tree instead of tracking `git pull`, use the built-in updater to sync with [github.com/elder-plinius/T3MP3ST](https://github.com/elder-plinius/T3MP3ST) without losing local secrets or bench output. It shows a numbered plan, asks **y/N** before changing anything, then runs `npm install`.
