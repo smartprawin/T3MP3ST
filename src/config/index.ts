@@ -537,10 +537,14 @@ class ConfigManager {
       join(homedir(), '.env'),
     ];
 
+    let envProvider: string | undefined;
+
     for (const envPath of envPaths) {
       if (existsSync(envPath)) {
         const envContent = readFileSync(envPath, 'utf-8');
         const lines = envContent.split('\n');
+        // Validation variables added
+        const VALID_PROVIDERS = ['openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'local'];
 
         for (const line of lines) {
           const trimmed = line.trim();
@@ -553,8 +557,17 @@ class ConfigManager {
             // empty OPENROUTER_API_KEY= — the .env file no longer clobbers it.
             if (key && value && process.env[key] === undefined) {
               process.env[key] = value;
+
+              // Track LLM_PROVIDER for default provider
+              if (key === 'LLM_PROVIDER' && VALID_PROVIDERS.includes(value.toLowerCase())) {
+                envProvider = value.toLowerCase();
+              }
             }
           }
+        }
+        // Set TEMPEST_DEFAULT_PROVIDER if LLM_PROVIDER found
+        if (envProvider && !process.env.TEMPEST_DEFAULT_PROVIDER) {
+          process.env.TEMPEST_DEFAULT_PROVIDER = envProvider;
         }
         break;
       }
@@ -674,7 +687,16 @@ class ConfigManager {
    * Get the LLM configuration for the default or specified provider
    */
   getLLMConfig(provider?: LLMProvider, model?: string): LLMConfig {
-    const actualProvider = provider || this.config.get('defaultProvider');
+    let actualProvider = provider;
+
+    if (!actualProvider) {
+      const envProvider = process.env.TEMPEST_DEFAULT_PROVIDER?.trim();
+      if (envProvider) {
+        actualProvider = envProvider as LLMProvider;
+      } else {
+        actualProvider = this.config.get('defaultProvider');
+      }
+    }
 
     let apiKey: string | undefined;
     let baseUrl: string | undefined;
