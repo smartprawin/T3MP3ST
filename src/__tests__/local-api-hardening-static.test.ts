@@ -88,12 +88,40 @@ describe('local API authorization hardening invariants', () => {
     expect(parser).toMatch(/changes the effective network destination/);
   });
 
-  it('Admiral live launch re-checks every General-produced execution target before mission bring-up', () => {
+  it('Admiral live launch permits expanded targets only with explicit operator approval receipts', () => {
     const route = routeBlock("app.post('/api/admiral/launch'", '// =============================================================================\n// BOUNTY PLATFORM INTEGRATIONS');
 
-    expect(route).toMatch(/ensureExecTargetsWithinApprovedTarget\(execConfig\.targets, brief\.target\)/);
+    expect(route).toMatch(/ensureExecTargetsAuthorized\(execConfig\.targets,\s*brief\.target,\s*req\.body/);
     expect(route).toMatch(/outOfScopeTargets\.length/);
-    expect(route.indexOf('ensureExecTargetsWithinApprovedTarget(execConfig.targets, brief.target)'))
+    expect(route.indexOf('ensureExecTargetsAuthorized(execConfig.targets, brief.target'))
       .toBeLessThan(route.indexOf('bringUpMissionFromPlan(execConfig, generalConfig)'));
+    expect(route).toMatch(/approvals/);
+    expect(route).toMatch(/approvalIds/);
+  });
+
+  it('approval lookup requires explicit receipt ids and wildcard hosts require opt-in', () => {
+    const findApproval = routeBlock('function findApproval(', 'function createApprovalRequest');
+    const approvalMatches = sourceBlock('function approvalMatches(', 'function ensureExecTargetsWithinApprovedTarget');
+
+    expect(findApproval).toMatch(/body\.approvalId/);
+    expect(findApproval).toMatch(/body\.approvalIds/);
+    expect(findApproval).not.toMatch(/\[\.\.\.approvalRequests\.values\(\)\]/);
+    expect(serverSource).toMatch(/Wildcard host approval requires explicit opt-in/);
+    expect(serverSource).toMatch(/body\.allowWildcard !== true/);
+    expect(approvalMatches.indexOf("approval.target === '*'"))
+      .toBeLessThan(approvalMatches.indexOf('targetUsesWildcard(approval.target) && !approval.wildcardOptIn'));
+  });
+
+  it('authorize-target only approves existing pending receipts and cannot mint broad active-action approvals', () => {
+    const route = routeBlock("app.post('/api/approvals/authorize-target'", "app.post('/api/approvals/:id/reject'");
+
+    expect(route).toMatch(/approvalId/);
+    expect(route).toMatch(/approvalIds/);
+    expect(route).toMatch(/approvalRequests\.get\(id\)/);
+    expect(route).toMatch(/approval\.status !== 'pending'/);
+    expect(route).toMatch(/Math\.min\(30/);
+    expect(route).not.toMatch(/createApprovalRequest/);
+    expect(route).not.toMatch(/allowedActions/);
+    expect(route).not.toMatch(/command_execution['"],\s*['"]autonomous_execution/);
   });
 });
