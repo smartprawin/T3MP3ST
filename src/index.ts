@@ -44,6 +44,7 @@ export {
   createAnthropicBackbone,
   createOpenRouterBackbone,
   createOpenAIBackbone,
+  createLiteLLMBackbone,
   createMockBackbone,
   createLocalBackbone,
   createBestAvailableBackbone,

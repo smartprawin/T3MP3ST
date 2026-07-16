@@ -4,6 +4,7 @@
  * Multi-provider LLM integration supporting:
  * - OpenRouter (recommended - access to Claude, GPT-4, Llama, etc.)
  * - Venice (OpenAI-compatible, privacy-focused / uncensored models)
+ * - LiteLLM (OpenAI-compatible AI gateway — 100+ providers via unified proxy)
  * - Anthropic (direct Claude access)
  * - OpenAI (GPT models)
  * - Mock (for testing)
@@ -354,6 +355,28 @@ class VeniceAdapter extends OpenRouterAdapter {
       return {
         valid: false,
         error: 'Venice API key is required. Get one at https://venice.ai/settings/api',
+      };
+    }
+    return { valid: true };
+  }
+}
+
+// =============================================================================
+// LITELLM ADAPTER
+// =============================================================================
+// LiteLLM is an AI gateway proxy that routes to 100+ LLM providers through a
+// single OpenAI-compatible API. Same wire shape as OpenRouter (Bearer auth,
+// POST /chat/completions, identical request/response + tool-calling + SSE
+// stream), so it reuses the entire OpenRouter adapter and only differs in its
+// default base URL and the key-required error message.
+class LiteLLMAdapter extends OpenRouterAdapter {
+  name = 'litellm';
+
+  validateConfig(): { valid: boolean; error?: string } {
+    if (!this.config.baseUrl) {
+      return {
+        valid: false,
+        error: 'LiteLLM proxy base URL is required. Set LITELLM_BASE_URL or configure via tempest setup. Docs: https://docs.litellm.ai/docs/proxy/quick_start',
       };
     }
     return { valid: true };
@@ -1204,6 +1227,8 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
         return new OpenRouterAdapter(config);
       case 'venice':
         return new VeniceAdapter(config);
+      case 'litellm':
+        return new LiteLLMAdapter(config);
       case 'anthropic':
         return new AnthropicAdapter(config);
       case 'openai':
@@ -1486,6 +1511,13 @@ export function createOpenAIBackbone(apiKey?: string, model?: string): LLMBackbo
   return new LLMBackbone(llmConfig);
 }
 
+export function createLiteLLMBackbone(apiKey?: string, model?: string, baseUrl?: string): LLMBackbone {
+  const llmConfig = config.getLLMConfig('litellm', model);
+  if (apiKey) llmConfig.apiKey = apiKey;
+  if (baseUrl) llmConfig.baseUrl = baseUrl;
+  return new LLMBackbone(llmConfig);
+}
+
 export function createMockBackbone(): LLMBackbone {
   return new LLMBackbone({
     provider: 'mock',
@@ -1509,7 +1541,7 @@ export function createLocalBackbone(model?: string, baseUrl?: string): LLMBackbo
  * Create the best available backbone based on configured API keys
  */
 export function createBestAvailableBackbone(): LLMBackbone {
-  // Priority: OpenRouter > Venice > Anthropic > OpenAI > Local > Mock
+  // Priority: OpenRouter > Venice > LiteLLM > Anthropic > OpenAI > Local > Mock
   const providers = config.getConfiguredProviders();
 
   if (providers.includes('openrouter')) {
@@ -1517,6 +1549,9 @@ export function createBestAvailableBackbone(): LLMBackbone {
   }
   if (providers.includes('venice')) {
     return createVeniceBackbone();
+  }
+  if (providers.includes('litellm')) {
+    return createLiteLLMBackbone();
   }
   if (providers.includes('anthropic')) {
     return createAnthropicBackbone();
