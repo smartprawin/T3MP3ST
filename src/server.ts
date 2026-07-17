@@ -32,9 +32,6 @@ import type { OperatorArchetype } from './types/index.js';
 import { listOperatorPrompts, setOperatorOverride, resetOperatorOverride, type OperatorOverride } from './operators/index.js';
 import { ingestRepoToSourceContext, runWhiteboxAnalysis, resolveRepoSourceForAnalysis, RepoCloneError, RepoPathError } from './recon/whitebox.js';
 import { redactCredential } from './evidence/index.js';
-import dotenv from 'dotenv';
-
-dotenv.config();
 
 const execFileAsync = promisify(execFile);
 
@@ -144,7 +141,8 @@ const PORT = process.env.T3MP3ST_PORT || 3333;
 // this local command-executing API (CSRF / DNS-rebinding), NOT remote attackers.
 // The CORS lock + origin guard below defend that vector; if this is ever exposed
 // beyond localhost, add real Bearer-token auth as the upgrade path.
-const HOST = process.env.T3MP3ST_HOST || '127.0.0.1';
+// DOCKER: Inside containers, bind to 0.0.0.0 (env var can still override).
+const HOST = process.env.T3MP3ST_HOST || (process.env.DOCKER === 'true' ? '0.0.0.0' : '127.0.0.1');
 // B-02: only enforce the Host-header allow-list when bound to loopback (the
 // default). If the operator EXPLICITLY exposes the server (T3MP3ST_HOST set to a
 // non-loopback address) they've opted into network access behind their own front,
@@ -184,6 +182,25 @@ function isLoopbackOrigin(originHeader: string | undefined): boolean {
   }
 }
 
+// #84: a SAME-ORIGIN request — the caller's Origin (or Referer) host:port equals THIS server's
+// own Host header — is by definition not a foreign-website drive-by. It is trusted ONLY when the
+// operator has bound to a non-loopback address (see HOST_IS_LOOPBACK), i.e. they have explicitly
+// opted into network access — the same decision that stands the anti-rebinding Host guard down
+// below. That lets the operator's own LAN/custom-host UI (e.g. http://192.168.x.x:3333/ui) talk to
+// its backend instead of being rejected as cross-origin, while a foreign origin (evil.com) still
+// mismatches the Host and is refused. On a loopback bind this is never consulted: the strict
+// loopback-only origin gate plus the Host guard remain fully in force, so no CSRF/rebinding gap.
+// URL.host is "hostname:port" with the default port (80/443) omitted — exactly how browsers set
+// BOTH the Origin and the Host header, so a genuine same-origin request compares equal.
+function isSameOriginAsHost(source: string | undefined, hostHeader: string | undefined): boolean {
+  if (!source || !hostHeader) return false;
+  try {
+    return new URL(source).host.toLowerCase() === hostHeader.trim().toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 // CORS locked to the localhost UI origins ONLY. A same-origin fetch from the UI
 // (or a tool with no Origin like curl/CLI) is allowed; any other website's
 // Origin is rejected so the browser blocks it from reading our responses.
@@ -218,6 +235,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   // No Origin AND no Referer → trusted local caller (curl/CLI/MCP). Allow.
   if (!source) return next();
   if (isLoopbackOrigin(source)) return next();
+  // #84: on a non-loopback (opted-in network) bind, also trust the operator's own same-origin UI.
+  if (!HOST_IS_LOOPBACK && isSameOriginAsHost(source, req.headers.host)) return next();
   res.status(403).json({
     error: 'Cross-origin request rejected',
     detail: 'This local API only accepts requests from the localhost UI, curl, or the CLI. A cross-origin (foreign-website) Origin/Referer was detected and blocked to prevent CSRF/drive-by command execution.',
@@ -344,6 +363,79 @@ interface ParsedCommand {
 
 const SHELL_META = /[|&;$<>`\\]/;
 const COMMAND_CONTROL = /[\x00-\x1F\x7F-\x9F\u2028\u2029]/;
+const CURL_TRANSPORT_OVERRIDE_FLAGS = new Set([
+  '--resolve',
+  '--connect-to',
+  '--proxy',
+  '--preproxy',
+  '--socks4',
+  '--socks4a',
+  '--socks5',
+  '--socks5-hostname',
+  '--unix-socket',
+  '--abstract-unix-socket',
+  '--interface',
+  '--url',
+  '--config',
+  '--next',
+  '-x',
+  '-K',
+]);
+const CURL_VALUE_FLAGS = new Set([
+  '-A', '--user-agent',
+  '-b', '--cookie',
+  '-c', '--cookie-jar',
+  '-d', '--data', '--data-ascii', '--data-binary', '--data-raw', '--data-urlencode',
+  '-F', '--form',
+  '-H', '--header',
+  '-m', '--max-time',
+  '-o', '--output',
+  '-T', '--upload-file',
+  '-u', '--user',
+  '-X', '--request',
+  '--cacert', '--cert', '--connect-timeout', '--key', '--request-target', '--retry',
+]);
+
+function findCurlTransportOverrideFlag(args: string[]): string | undefined {
+  for (const arg of args) {
+    if (!arg) continue;
+    const flag = arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg;
+    if (CURL_TRANSPORT_OVERRIDE_FLAGS.has(flag)) return flag;
+    if (arg.startsWith('-x') && arg !== '-X' && arg.length > 2) return '-x';
+    if (arg.startsWith('-K') && arg.length > 2) return '-K';
+  }
+  return undefined;
+}
+
+function looksLikeCurlUrlOperand(arg: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:\/\/\S+/i.test(arg)
+    || /^(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:[/?#].*)?$/i.test(arg)
+    || /^(?:localhost|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?(?:[/?#].*)?$/i.test(arg)
+    || /^\[[0-9a-f:]+\](?::\d+)?(?:[/?#].*)?$/i.test(arg);
+}
+
+function countCurlUrlOperands(args: string[]): number {
+  let count = 0;
+  let skipNext = false;
+  let endOfOptions = false;
+  for (const arg of args) {
+    if (!arg) continue;
+    if (skipNext) { skipNext = false; continue; }
+    if (!endOfOptions && arg === '--') { endOfOptions = true; continue; }
+    if (!endOfOptions && arg.startsWith('--')) {
+      const hasInlineValue = arg.includes('=');
+      const flag = hasInlineValue ? arg.slice(0, arg.indexOf('=')) : arg;
+      if (!hasInlineValue && CURL_VALUE_FLAGS.has(flag)) skipNext = true;
+      continue;
+    }
+    if (!endOfOptions && arg.startsWith('-')) {
+      if (arg.length === 2 && CURL_VALUE_FLAGS.has(arg)) skipNext = true;
+      continue;
+    }
+    if (looksLikeCurlUrlOperand(arg)) count += 1;
+  }
+  return count;
+}
 
 function parseCommand(command: string): ParsedCommand | { error: string } {
   if (SHELL_META.test(command) || COMMAND_CONTROL.test(command)) return { error: 'Shell control characters are not allowed; use direct argv-style commands only.' };
@@ -354,6 +446,15 @@ function parseCommand(command: string): ParsedCommand | { error: string } {
   const adapter = adapterForBinary(bin);
   if (adapter?.execution === 'catalog_only' || adapter?.execution === 'import_only') {
     return { error: `Tool is catalog-only and cannot be executed directly: ${bin}` };
+  }
+  if (bin === 'curl') {
+    const overrideFlag = findCurlTransportOverrideFlag(args);
+    if (overrideFlag) {
+      return { error: `curl flag ${overrideFlag} changes the effective network destination and is not allowed through /api/tools/execute.` };
+    }
+    if (countCurlUrlOperands(args) > 1) {
+      return { error: 'curl commands with multiple URL operands are not allowed through /api/tools/execute; submit one transfer per approved target.' };
+    }
   }
   return { bin, args };
 }
@@ -507,6 +608,7 @@ interface ApprovalRequest {
   target: string;
   reason: string;
   status: ApprovalStatus;
+  wildcardOptIn?: boolean;
   operationId?: string;
   requestedBy: DraftSource | 'system';
   createdAt: string;
@@ -1091,10 +1193,29 @@ function approvalIsFresh(approval: ApprovalRequest): boolean {
   return Date.parse(approval.expiresAt) > Date.now();
 }
 
+function targetUsesWildcard(target: string): boolean {
+  const raw = normalizeTargetValue(target).toLowerCase();
+  if (raw === '*') return true;
+  const withoutScheme = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
+  return withoutScheme.startsWith('*.') || hostFromTarget(raw).startsWith('*.');
+}
+
+function wildcardHostFromTarget(target: string): string {
+  const raw = normalizeTargetValue(target).toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
+  return raw.replace(/\/.*$/, '').replace(/:\d+$/, '');
+}
+
 function approvalMatches(approval: ApprovalRequest, action: GuardAction, target: string): boolean {
   if (approval.action !== action) return false;
   if (approval.target === '*') return action === 'model_call' || action === 'autonomous_execution';
-  return hostFromTarget(approval.target) === hostFromTarget(target);
+  if (targetUsesWildcard(approval.target) && !approval.wildcardOptIn) return false;
+  const approvalHost = targetUsesWildcard(approval.target) ? wildcardHostFromTarget(approval.target) : hostFromTarget(approval.target);
+  const targetHost = hostFromTarget(target);
+  if (approvalHost.startsWith('*.')) {
+    const suffix = approvalHost.slice(1);
+    return targetHost.endsWith(suffix) && targetHost !== approvalHost.slice(2);
+  }
+  return approvalHost === targetHost;
 }
 
 function ensureExecTargetsWithinApprovedTarget(targets: string[], approvedTarget: string): string[] {
@@ -1104,6 +1225,15 @@ function ensureExecTargetsWithinApprovedTarget(targets: string[], approvedTarget
     .filter(target => hostFromTarget(target) !== approvedHost);
 }
 
+function ensureExecTargetsAuthorized(
+  targets: string[],
+  approvedTarget: string,
+  body: Record<string, unknown>,
+): string[] {
+  return ensureExecTargetsWithinApprovedTarget(targets, approvedTarget)
+    .filter(target => !findApproval(body, 'autonomous_execution', target));
+}
+
 function approvalMatchesGateScope(approval: ApprovalRequest, action: GuardAction, operationId: string, target: string): boolean {
   if (!approvalMatches(approval, action, target)) return false;
   if (approval.operationId && operationId && approval.operationId !== operationId) return false;
@@ -1111,10 +1241,17 @@ function approvalMatchesGateScope(approval: ApprovalRequest, action: GuardAction
 }
 
 function findApproval(body: Record<string, unknown>, action: GuardAction, target: string): ApprovalRequest | null {
-  const id = typeof body.approvalId === 'string' ? body.approvalId : '';
-  const approval = id ? approvalRequests.get(id) : undefined;
-  if (!approval || !approvalIsFresh(approval) || !approvalMatches(approval, action, target)) return null;
-  return approval;
+  const ids = [
+    typeof body.approvalId === 'string' ? body.approvalId : '',
+    ...(Array.isArray(body.approvalIds) ? body.approvalIds.filter((id): id is string => typeof id === 'string') : []),
+  ].filter(Boolean);
+
+  for (const id of ids) {
+    const approval = approvalRequests.get(id);
+    if (approval && approvalIsFresh(approval) && approvalMatches(approval, action, target)) return approval;
+  }
+
+  return null;
 }
 
 function createApprovalRequest(action: GuardAction, target: string, reason: string, body: Record<string, unknown>): ApprovalRequest {
@@ -1125,6 +1262,7 @@ function createApprovalRequest(action: GuardAction, target: string, reason: stri
     target,
     reason,
     status: 'pending',
+    wildcardOptIn: body.allowWildcard === true && targetUsesWildcard(target),
     operationId: typeof operationDraft?.operation_id === 'string' ? operationDraft.operation_id : undefined,
     requestedBy: ['human', 'agent', 't3mp3st'].includes(String(body.source)) ? body.source as DraftSource : 'system',
     createdAt: nowIso(),
@@ -4240,7 +4378,7 @@ function healthPayload(): Record<string, unknown> {
     version: '0.2.1',
     apiVersion: 'v1',
     llm: {
-      configured: Boolean(llmConfig.apiKey) || llmConfig.provider === 'codex',
+      configured: Boolean(llmConfig.apiKey) || providerRunsKeyless(llmConfig.provider),
       connected: Boolean(llm) || llmConfig.provider === 'codex',
       provider: llmConfig.provider,
       model: llmConfig.model,
@@ -4639,7 +4777,10 @@ export function broadcastEvent(event: string, data: Record<string, unknown>): vo
 const MAX_SSE_CLIENTS = 64;
 app.get('/api/events', (_req: Request, res: Response) => {
   const origin = _req.get('origin');
-  if (origin && !isLoopbackOrigin(origin)) {
+  // #84: allow the operator's own same-origin UI on a non-loopback (opted-in) bind; foreign
+  // origins still fail the loopback check AND the Host match, so they remain rejected.
+  const sameOriginNetworkBind = !HOST_IS_LOOPBACK && isSameOriginAsHost(origin, _req.headers.host);
+  if (origin && !isLoopbackOrigin(origin) && !sameOriginNetworkBind) {
     res.status(403).json({
       error: 'Cross-origin event stream rejected',
       detail: 'The SSE feed may contain live mission/task/finding metadata and is only available to the localhost UI.',
@@ -4802,6 +4943,15 @@ app.post('/api/approvals/request', (req: Request, res: Response) => {
     });
     return;
   }
+  if (targetUsesWildcard(target) && target !== '*' && body.allowWildcard !== true) {
+    res.status(400).json({
+      error: 'Wildcard host approval requires explicit opt-in',
+      action,
+      target,
+      next: 'Send allowWildcard:true only when the operator intentionally approves the whole subdomain wildcard.',
+    });
+    return;
+  }
   const reason = typeof body.reason === 'string' && body.reason.trim()
     ? body.reason.trim()
     : `Approval requested for ${action} against ${target}`;
@@ -4823,6 +4973,68 @@ app.post('/api/approvals/:id/approve', (req: Request, res: Response) => {
   approval.updatedAt = nowIso();
   emitContractEvent('approval.approved', { approvalId: approval.id, action: approval.action, target: approval.target });
   res.json(approval);
+});
+
+app.post('/api/approvals/authorize-target', (req: Request, res: Response) => {
+  const body = req.body as Record<string, unknown>;
+  const target = normalizeTargetValue(body.target);
+  const approvalIds = [
+    typeof body.approvalId === 'string' ? body.approvalId : '',
+    ...(Array.isArray(body.approvalIds) ? body.approvalIds.filter((id): id is string => typeof id === 'string') : []),
+  ].filter(Boolean);
+  if (!approvalIds.length) {
+    res.status(400).json({
+      error: 'approvalId or approvalIds required',
+      next: 'Request a pending receipt first, then approve that exact receipt id.',
+    });
+    return;
+  }
+  if (target === '*') {
+    res.status(400).json({
+      error: 'Wildcard target authorization is not allowed for active actions',
+      next: 'Authorize one concrete host or URL so receipts remain target-scoped.',
+    });
+    return;
+  }
+  if (targetUsesWildcard(target) && target !== '*' && body.allowWildcard !== true) {
+    res.status(400).json({
+      error: 'Wildcard host authorization requires explicit opt-in',
+      next: 'Send allowWildcard:true only when the operator intentionally approves the whole subdomain wildcard.',
+    });
+    return;
+  }
+
+  const ttlMinutes = Math.max(1, Math.min(30, Number(body.ttlMinutes || 30)));
+  const expiresAt = new Date(Date.now() + ttlMinutes * 60_000).toISOString();
+  const approvals: ApprovalRequest[] = [];
+  for (const id of [...new Set(approvalIds)]) {
+    const approval = approvalRequests.get(id);
+    if (!approval) {
+      res.status(404).json({ error: 'Approval request not found', approvalId: id });
+      return;
+    }
+    if (approval.status !== 'pending') {
+      res.status(409).json({ error: 'Approval request is not pending', approvalId: id, status: approval.status });
+      return;
+    }
+    if (target && !approvalMatches(approval, approval.action, target)) {
+      res.status(400).json({
+        error: 'Approval target mismatch',
+        approvalId: id,
+        approvalTarget: approval.target,
+        target,
+      });
+      return;
+    }
+    approval.status = 'approved';
+    approval.approvedBy = typeof body.approvedBy === 'string' ? body.approvedBy : 'local-operator';
+    approval.expiresAt = expiresAt;
+    approval.updatedAt = nowIso();
+    emitContractEvent('approval.approved', { approvalId: approval.id, action: approval.action, target: approval.target });
+    approvals.push(approval);
+  }
+
+  res.json({ target: target || null, expiresAt, approvals });
 });
 
 app.post('/api/approvals/:id/reject', (req: Request, res: Response) => {
@@ -5871,7 +6083,8 @@ app.get('/api/llm/status', (_req: Request, res: Response) => {
     connected: !!llm,
     provider: llmConfig.provider,
     model: llmConfig.model,
-    hasApiKey: !!llmConfig.apiKey
+    hasApiKey: !!llmConfig.apiKey,
+    configured: Boolean(llmConfig.apiKey) || providerRunsKeyless(llmConfig.provider),
   });
 });
 
@@ -5963,8 +6176,8 @@ app.post('/api/mission/start', async (req: Request, res: Response): Promise<void
     targets = [],
     operators = [],
     apiKey,
-    provider = 'openrouter',
-    model = 'anthropic/claude-sonnet-4',
+    provider,
+    model,
     // OPTIONAL white-box source: an absolute path to a LOCAL repo you own. When
     // present, we ingest + security-rank it and hand the packed source to the
     // command via setWhiteboxSource BEFORE start(), so operators reason over the
@@ -5972,18 +6185,19 @@ app.post('/api/mission/start', async (req: Request, res: Response): Promise<void
     repoPath,
   } = req.body;
 
-  // Use provided apiKey or fall back to server-configured one. Local-agent backends
-  // (Claude Code / Codex / Hermes) need NO key — the agent uses its own login.
+  // Use the request-selected backend, or fall back to the server's configured default.
+  // Local/local-agent backends need no hosted API key.
   // SECURITY NOTE: apiKey is read from the request body (Authorization header is
   // preferred). Kept body-accepted for the same-origin UI; only reachable from
   // the local operator (loopback bind + origin guard). Header move is out of scope.
-  const effectiveKey = apiKey || config.getLLMConfig().apiKey;
-  if (providerNeedsApiKey(provider) && !effectiveKey) {
+  const missionLLMConfig = resolveGeneralLLMConfig(provider, model, apiKey);
+  const effectiveKey = missionLLMConfig.apiKey;
+  if (providerNeedsApiKey(missionLLMConfig.provider) && !effectiveKey) {
     res.status(400).json({ error: 'API key required — pass apiKey, configure one on the server, or connect a local agent (Claude Code / Codex / Hermes)' });
     return;
   }
-  if (provider === 'local-agent') {
-    const localAgent = await requireLiveLocalAgent(model);
+  if (missionLLMConfig.provider === 'local-agent') {
+    const localAgent = await requireLiveLocalAgent(missionLLMConfig.model);
     if (!localAgent.ok) {
       res.status(503).json({ error: localAgent.error });
       return;
@@ -6015,7 +6229,7 @@ app.post('/api/mission/start', async (req: Request, res: Response): Promise<void
   }
 
   try {
-    const cmd = createTempestCommandInstance(name, effectiveKey, provider, model);
+    const cmd = createTempestCommandInstance(name, effectiveKey, missionLLMConfig.provider, missionLLMConfig.model);
 
     // Add targets
     for (const t of targets) {
@@ -6200,7 +6414,7 @@ app.post('/api/mission/resume', (_req: Request, res: Response) => {
 app.get('/api/mission/status', (_req: Request, res: Response) => {
   const cmd = getTempestCommand();
   if (!cmd) {
-    res.json({ active: false });
+    res.json({ active: false, progress: [], tasks: [] });
     return;
   }
 
@@ -6230,6 +6444,8 @@ app.get('/api/mission/status', (_req: Request, res: Response) => {
     targets: status.targets,
     vault: status.vault,
     opsec: status.opsec,
+    tasks: status.tasks,
+    progress: status.progress,
     findings: findings.map(f => ({
       id: f.id,
       title: f.title,
@@ -6466,6 +6682,10 @@ function providerNeedsApiKey(provider: string): boolean {
   return !['codex', 'mock', 'local', 'local-agent'].includes(provider);
 }
 
+function providerRunsKeyless(provider: string): boolean {
+  return !providerNeedsApiKey(provider);
+}
+
 function readPositiveTimeoutEnv(name: string): number | undefined {
   const raw = process.env[name];
   if (raw == null || raw.trim() === '') return undefined;
@@ -6484,7 +6704,7 @@ function readGeneralTimeoutEnv(): number | undefined {
 // the key in the body, so we accept it to avoid breaking it. Moving to a header
 // needs a coordinated UI change and is out of scope. The body key is only ever
 // reachable from the local operator (loopback bind + origin guard).
-function resolveGeneralLLMConfig(provider: string, model: string | undefined, apiKey: string | undefined): {
+function resolveGeneralLLMConfig(provider: string | undefined, model: string | undefined, apiKey: string | undefined): {
   provider: any;
   model: string;
   apiKey?: string;
@@ -6492,7 +6712,8 @@ function resolveGeneralLLMConfig(provider: string, model: string | undefined, ap
   temperature: number;
   timeout: number;
 } {
-  const selectedProvider = provider || 'openrouter';
+  const defaultConfig = config.getLLMConfig();
+  const selectedProvider = provider || defaultConfig.provider;
   // Local-agent backends (Claude Code / Codex / Hermes via the connector) need NO API key — the
   // agent uses its own login. The agent id (codex|claude|hermes) travels in `model`.
   if (selectedProvider === 'local-agent') {
@@ -6553,8 +6774,6 @@ function bringUpMissionFromPlan(
 async function runCodexExecReadinessProbe(command: string): Promise<{ stdout: string; stderr: string }> {
   const marker = 'T3MP3ST_CODEX_READY';
   const args = [
-    '--ask-for-approval',
-    'never',
     'exec',
     '-c',
     'model_reasoning_effort="low"',
@@ -6580,7 +6799,7 @@ async function runCodexExecReadinessProbe(command: string): Promise<{ stdout: st
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
       reject(new Error('Codex exec readiness probe timed out'));
-    }, 30000);
+    }, 60000);
 
     // Bounded accumulation so a runaway/verbose child can't grow these strings without limit
     // before the 30s timer fires (matches the local-agent caps). A normal probe emits a tiny
@@ -6632,7 +6851,7 @@ app.get('/api/codex/status', async (_req: Request, res: Response): Promise<void>
       tokenHandling: 'no token is accepted by or returned from T3MP3ST',
       command,
       version: stdout.trim(),
-      executionMode: 'codex exec --ephemeral --sandbox read-only --ask-for-approval never',
+      executionMode: 'codex exec --ephemeral --sandbox read-only',
       execProbe: 'POST /api/codex/probe',   // exec self-test moved off GET (B-04)
     });
   } catch (error: any) {
@@ -6652,7 +6871,7 @@ app.post('/api/codex/probe', async (_req: Request, res: Response): Promise<void>
       provider: 'codex',
       command,
       version: stdout.trim(),
-      executionMode: 'codex exec --ephemeral --sandbox read-only --ask-for-approval never',
+      executionMode: 'codex exec --ephemeral --sandbox read-only',
     };
     try {
       const probe = await runCodexExecReadinessProbe(command);
@@ -6685,8 +6904,8 @@ app.post('/api/general/plan', async (req: Request, res: Response): Promise<void>
     urgency,
     opsecPreference,
     apiKey,
-    provider = 'openrouter',
-    model = 'anthropic/claude-sonnet-4',
+    provider,
+    model,
   } = req.body;
 
   if (!objective) {
@@ -6759,8 +6978,8 @@ app.post('/api/general/execute', async (req: Request, res: Response): Promise<vo
 
   const {
     apiKey,
-    provider = 'openrouter',
-    model = 'anthropic/claude-sonnet-4',
+    provider,
+    model,
   } = req.body;
 
   let generalConfig;
@@ -6872,8 +7091,8 @@ app.post('/api/general/auto', async (req: Request, res: Response): Promise<void>
     urgency,
     opsecPreference,
     apiKey,
-    provider = 'openrouter',
-    model = 'anthropic/claude-sonnet-4',
+    provider,
+    model,
   } = req.body;
 
   if (!objective) {
@@ -7131,7 +7350,7 @@ import { Admiral, briefToDirective, type ChatMsg, type MissionBrief } from './ad
  */
 app.post('/api/admiral/converse', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { messages, provider = 'openrouter', model, apiKey } = req.body as {
+    const { messages, provider, model, apiKey } = req.body as {
       messages: ChatMsg[]; provider?: string; model?: string; apiKey?: string;
     };
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -7161,7 +7380,7 @@ app.post('/api/admiral/converse', async (req: Request, res: Response): Promise<v
  */
 app.post('/api/admiral/suggest', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { operatorPrompt, archetype, failureSignal, provider = 'openrouter', model, apiKey } = req.body as {
+    const { operatorPrompt, archetype, failureSignal, provider, model, apiKey } = req.body as {
       operatorPrompt?: string; archetype?: string; failureSignal?: string; provider?: string; model?: string; apiKey?: string;
     };
     let prompt = typeof operatorPrompt === 'string' ? operatorPrompt : '';
@@ -7196,7 +7415,7 @@ app.post('/api/admiral/suggest', async (req: Request, res: Response): Promise<vo
  */
 app.post('/api/admiral/launch', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { brief, confirmed, provider = 'openrouter', model, apiKey } = req.body as {
+    const { brief, confirmed, provider, model, apiKey } = req.body as {
       brief: MissionBrief; confirmed?: boolean; provider?: string; model?: string; apiKey?: string;
     };
     if (!brief || !brief.objective || !brief.target) {
@@ -7251,12 +7470,20 @@ app.post('/api/admiral/launch', async (req: Request, res: Response): Promise<voi
       res.status(409).json({ error: 'General plan gate is HOLD', mode: 'live', plan, review: execConfig.review });
       return;
     }
-    const outOfScopeTargets = ensureExecTargetsWithinApprovedTarget(execConfig.targets, brief.target);
+    const outOfScopeTargets = ensureExecTargetsAuthorized(execConfig.targets, brief.target, req.body as Record<string, unknown>);
     if (outOfScopeTargets.length) {
+      const approvals = outOfScopeTargets.map(target => createApprovalRequest(
+        'autonomous_execution',
+        target,
+        `Admiral plan expanded execution scope from ${brief.target} to ${target}`,
+        req.body as Record<string, unknown>
+      ));
       res.status(403).json({
-        error: 'Admiral LIVE plan contains targets outside the approved brief target',
+        error: 'Admiral LIVE plan needs approval for expanded target scope',
         approvedTarget: brief.target,
         outOfScopeTargets,
+        approvals,
+        next: 'Approve the expanded target receipts, then retry /api/admiral/launch with approvalIds.',
       });
       return;
     }
@@ -7371,7 +7598,7 @@ type ConnectedLocalAgent = {
 };
 const connectedLocalAgents = new Map<string, ConnectedLocalAgent>();
 const LOCAL_AGENT_HEALTH_TTL_MS = 30_000;
-const LOCAL_AGENT_HEALTH_TIMEOUT_MS = 15_000;
+const LOCAL_AGENT_HEALTH_TIMEOUT_MS = 45_000;
 
 async function refreshConnectedLocalAgentHealth(force = false): Promise<void> {
   const now = Date.now();

@@ -25,6 +25,7 @@
 
 import type { ToolAdapter } from './catalog.js';
 import type { CustomTool, ToolContext, ToolResult } from '../types/index.js';
+import { parseToolOutput } from './parsers.js';
 
 // =============================================================================
 // INJECTED DEPENDENCIES
@@ -355,6 +356,41 @@ const ARG_TEMPLATES: Record<string, ArgTemplate> = {
     defaultTimeoutMs: 180_000,
     build: (target, params) => ['--json', scanPath(target, params)],
   },
+
+  // ── Recon / OSINT adapters (networked) ─────────────────────────────────────────────────────────
+  whatweb: {
+    targetParam: 'url',
+    defaultTimeoutMs: 60_000,
+    // JSON straight to stdout; --no-errors keeps a single unreachable host from aborting the run.
+    build: (target) => ['--log-json=-', '--no-errors', target],
+  },
+  wafw00f: {
+    targetParam: 'url',
+    defaultTimeoutMs: 60_000,
+    build: (target) => [target, '-a', '-f', 'json', '-o', '-'],
+  },
+  amass: {
+    targetParam: 'domain',
+    defaultTimeoutMs: 300_000,
+    // `enum` subcommand is required; -passive keeps it to OSINT sources (no active resolution/brute).
+    build: (target) => ['enum', '-passive', '-d', target],
+  },
+  dnsx: {
+    targetParam: 'domain',
+    defaultTimeoutMs: 120_000,
+    // dnsx takes the domain via -d (comma-sep/stdin), never a bare positional.
+    build: (target) => ['-d', target, '-a', '-aaaa', '-cname', '-resp', '-json', '-silent'],
+  },
+  'testssl.sh': {
+    targetParam: 'url',
+    defaultTimeoutMs: 300_000,
+    build: (target) => ['--quiet', '--color', '0', target],
+  },
+  waybackurls: {
+    targetParam: 'domain',
+    defaultTimeoutMs: 60_000,
+    build: (target) => [target],
+  },
 };
 
 /** Fallback for any mintable adapter without a bespoke template: pass the target as a positional arg. */
@@ -470,7 +506,16 @@ export function adapterToCustomTool(adapter: ToolAdapter, deps: AdapterToolDeps)
       };
     }
 
-    return { success: true, output: result.stdout };
+    // Populate the structured `findings` channel from the raw stdout when a parser is wired for
+    // this tool (parseToolOutput → [] otherwise). The raw stdout is ALWAYS kept as `output` — it
+    // is the evidence of record the agent loop stamps onto each finding and the live gate checks;
+    // the parser summarises it, never replaces it. A parse yielding nothing leaves findings unset.
+    const findings = parseToolOutput(adapter.id, result.stdout);
+    return {
+      success: true,
+      output: result.stdout,
+      ...(findings.length ? { findings } : {}),
+    };
   };
 
   return {

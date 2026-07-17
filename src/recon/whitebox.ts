@@ -23,7 +23,7 @@ import {
 import { DecompositionOrchestrator } from '../orchestration/index.js';
 import type { DecompositionConfig } from '../orchestration/index.js';
 import type { LLMProvider } from '../types/index.js';
-import { mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { homedir, tmpdir } from 'node:os';
 import { join as joinPath, isAbsolute, relative, resolve, sep } from 'node:path';
@@ -82,13 +82,6 @@ function isGitHubHttpsRepoUrl(input: string): boolean {
   }
 }
 
-function githubCloneUrlWithToken(repoUrl: string, token: string): string {
-  const url = new URL(repoUrl);
-  url.username = 'x-access-token';
-  url.password = token;
-  return url.toString();
-}
-
 function getGitHubRepoToken(): string | undefined {
   return process.env.T3MP3ST_GITHUB_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim();
 }
@@ -105,15 +98,36 @@ export function cloneGitHubRepoForAnalysis(repoUrl: string): ResolvedRepoSource 
 
   const tempRoot = mkdtempSync(joinPath(tmpdir(), 't3mp3st-repo-'));
   const cloneDir = joinPath(tempRoot, 'repo');
+  const askPassPath = joinPath(tempRoot, 'git-askpass.sh');
   try {
+    writeFileSync(
+      askPassPath,
+      [
+        '#!/bin/sh',
+        'case "$1" in',
+        "*Username*) printf '%s\\n' 'x-access-token' ;;",
+        '*) printf "%s\\n" "$T3MP3ST_GIT_TOKEN" ;;',
+        'esac',
+        '',
+      ].join('\n'),
+      { mode: 0o700 },
+    );
     execFileSync('git', [
       '-c', 'credential.helper=',
       'clone',
       '--depth', '1',
       '--filter=blob:none',
-      githubCloneUrlWithToken(repoUrl, token),
+      repoUrl,
       cloneDir,
-    ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    ], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: {
+        ...process.env,
+        GIT_ASKPASS: askPassPath,
+        GIT_TERMINAL_PROMPT: '0',
+        T3MP3ST_GIT_TOKEN: token,
+      },
+    });
 
     return {
       repoPath: realpathSync(cloneDir),

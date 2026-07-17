@@ -14,11 +14,13 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync, realpathSync } from 'fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync, realpathSync, readFileSync } from 'fs';
 import { statSync } from 'node:fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { resolveContainedRepoPath, resolveRepoSourceForAnalysis, RepoCloneError, RepoPathError } from '../recon/whitebox.js';
+
+const whiteboxSource = readFileSync('src/recon/whitebox.ts', 'utf8');
 
 // Mock node:fs (what whitebox.ts imports) so we can force statSync to throw AFTER realpath
 // succeeds — the TOCTOU race path. Every other export keeps its real implementation, and
@@ -112,6 +114,13 @@ describe('resolveContainedRepoPath (B-03 path containment)', () => {
       if (prevT3 === undefined) delete process.env.T3MP3ST_GITHUB_TOKEN;
       else process.env.T3MP3ST_GITHUB_TOKEN = prevT3;
     }
+  });
+
+  it('does not embed GitHub tokens in the git clone URL argument', () => {
+    expect(whiteboxSource).toContain('GIT_ASKPASS');
+    expect(whiteboxSource).toContain('T3MP3ST_GIT_TOKEN');
+    expect(whiteboxSource).not.toContain('githubCloneUrlWithToken');
+    expect(whiteboxSource).not.toContain('url.password = token');
   });
 
   it('normalizes a statSync failure (TOCTOU delete after realpath) to RepoPathError', () => {
