@@ -16,7 +16,8 @@ import { appendFile, mkdir, readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { promisify } from 'util';
 import { createHash, randomUUID } from 'crypto';
-import { config } from './config/index.js';
+import { config, AVAILABLE_MODELS } from './config/index.js';
+import { resolveModels } from './config/provider-models.js';
 import { redactString, redactLedgerText, redactSecrets } from './redact.js';
 import { LLMBackbone } from './llm/index.js';
 import { TempestCommand } from './index.js';
@@ -28,12 +29,16 @@ import { AGENT_PROMPT_PACKS, FOREFRONT_PRESSURE_LANES, OPERATOR_RUNBOOKS, RESOUR
 import { AI_REDTEAM_PLAYBOOK, AI_REDTEAM_TECHNIQUE_IDS, aiRedTeamBriefing } from './resources/ai-redteam-playbook.js';
 import { OPERATOR_SYSTEM_PROMPTS, PLINIAN_OPERATOR_DOCTRINE, THE_FIXER_SYSTEM_PROMPT } from './prompts/index.js';
 import { createTargetFromUrl, createTargetFromIP } from './target/index.js';
-import type { OperatorArchetype } from './types/index.js';
+import type { OperatorArchetype, LLMProvider } from './types/index.js';
 import { listOperatorPrompts, setOperatorOverride, resetOperatorOverride, type OperatorOverride } from './operators/index.js';
 import { ingestRepoToSourceContext, runWhiteboxAnalysis, resolveRepoSourceForAnalysis, RepoCloneError, RepoPathError } from './recon/whitebox.js';
 import { redactCredential } from './evidence/index.js';
 
 const execFileAsync = promisify(execFile);
+
+function isKnownLLMProvider(provider: string): provider is LLMProvider {
+  return Object.prototype.hasOwnProperty.call(AVAILABLE_MODELS, provider);
+}
 
 // =============================================================================
 // PAYLOAD DATABASES (Shared with MCP server)
@@ -6086,6 +6091,34 @@ app.get('/api/llm/status', (_req: Request, res: Response) => {
     hasApiKey: !!llmConfig.apiKey,
     configured: Boolean(llmConfig.apiKey) || providerRunsKeyless(llmConfig.provider),
   });
+});
+
+// POST /api/models — live model list for the Universal API Config panel (#90).
+// POST (not GET) so the browser can pass its own localStorage-held key/baseUrl in the body — the
+// standalone UI holds the key, not the server (consistent with the existing per-request mission key,
+// and it stays on localhost). Body values override server config; missing → server config. Runs
+// server-side so the browser dodges provider CORS, and fails open to the static AVAILABLE_MODELS list
+// (source:'static') so a missing key / network error never leaves the panel empty.
+app.post('/api/models', async (req: Request, res: Response): Promise<void> => {
+  const body = (req.body ?? {}) as { provider?: string; apiKey?: string; baseUrl?: string };
+  const defaultProvider = config.getLLMConfig().provider;
+  const requestedProvider = (typeof body.provider === 'string' && body.provider.trim()) || defaultProvider;
+  const provider = isKnownLLMProvider(requestedProvider) ? requestedProvider : defaultProvider;
+  // getLLMConfig throws for any provider it doesn't switch on (e.g. the legitimate 'local-agent', or a
+  // garbage string). A synchronous throw inside this async handler would hang the request (Express 4
+  // never responds), so swallow it and fall through to the static list — the route must always answer.
+  let cfg: { baseUrl?: string; apiKey?: string } = {};
+  try { cfg = config.getLLMConfig(provider); } catch { /* provider has no remote/server config → static fallback */ }
+  const bodyBaseUrl = typeof body.baseUrl === 'string' && body.baseUrl.trim() ? body.baseUrl : undefined;
+  const bodyKey = typeof body.apiKey === 'string' && body.apiKey ? body.apiKey : undefined;
+  // Bind key+baseUrl by source: a caller-supplied custom baseUrl must bring its OWN key — never lend
+  // the server's configured apiKey to a body-chosen URL (that would disclose the stored key). The
+  // server key is only ever sent to the server's own configured provider endpoint.
+  const baseUrl = bodyBaseUrl ?? cfg.baseUrl;
+  const apiKey = bodyBaseUrl ? bodyKey : (bodyKey ?? cfg.apiKey);
+  const staticFallback = AVAILABLE_MODELS[provider].map((m: { id: string }) => ({ id: m.id }));
+  const resolved = await resolveModels(provider, { baseUrl, apiKey, staticFallback });
+  res.json({ provider, ...resolved });
 });
 
 // =============================================================================
