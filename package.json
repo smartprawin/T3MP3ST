@@ -55,6 +55,7 @@
     "mcp": "tsx src/mcp-server.ts",
     "mcp:prod": "node dist/mcp-server.js",
     "test": "vitest run src && node scripts/test-ops-preflight.mjs",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest src",
     "lint": "eslint src/**/*.ts",
     "typecheck": "tsc --noEmit",
@@ -120,7 +121,9 @@
     "gradient-string": "^2.0.2",
     "inquirer": "^9.2.15",
     "ora": "^8.0.1",
-    "tsx": "^4.7.0"
+    "tree-sitter-wasms": "0.1.13",
+    "tsx": "^4.7.0",
+    "web-tree-sitter": "0.25.10"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
@@ -130,6 +133,7 @@
     "@types/gradient-string": "^1.1.5",
     "@types/inquirer": "^9.0.7",
     "@types/node": "^20.11.0",
+    "@vitest/coverage-v8": "4.1.9",
     "eslint": "^9.39.2",
     "typescript": "^5.3.3",
     "typescript-eslint": "^8.51.0",
