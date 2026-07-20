@@ -7037,9 +7037,9 @@ Correlating findings across agents, identifying patterns, producing actionable i
             { id: 'z-ai/glm-4.7', name: 'GLM 4.7', provider: 'Z.AI' },
             // Meta
             { id: 'meta-llama/llama-3.3-70b', name: 'Llama 3.3 70B', provider: 'Meta' },
-            // DeepSeek (Dec 2025)
-            { id: 'deepseek/deepseek-r1', name: 'DeepSeek R1', provider: 'DeepSeek' },
-            { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3', provider: 'DeepSeek' },
+            // DeepSeek (Jul 2026 — V4)
+            { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', provider: 'DeepSeek' },
+            { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', provider: 'DeepSeek' },
             // Mistral
             { id: 'mistralai/mistral-large', name: 'Mistral Large', provider: 'Mistral' },
             // Local
@@ -25836,8 +25836,8 @@ Be specific and actionable. Format as structured JSON.`;
     const bb = _admBackbone();
     try {
       // Op Admiral planning is a slow LLM call — cap it so a first-time user never gets a
-      // permanent "…drafting…" spinner if the model stalls (120s = generous but finite).
-      const r = await fetch('/api/admiral/launch', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(Object.assign({ brief: _admBrief('dry_run'), confirmed: false }, bb)), signal: AbortSignal.timeout(120000) });
+      // permanent "…drafting…" spinner if the model stalls (180s).
+      const r = await fetch('/api/admiral/launch', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(Object.assign({ brief: _admBrief('dry_run'), confirmed: false }, bb)), signal: AbortSignal.timeout(180000) });
       const d = await r.json();
       if (d.error) throw new Error(d.error);
       const plan = d.plan || d.directive || d;

@@ -323,12 +323,15 @@ function createTempestCommandInstance(missionName: string, apiKey: string | unde
     tempestCommand.stop();
   }
 
+  const baseConfig = config.getLLMConfig(provider as any, model);
+
   tempestCommand = new TempestCommand({
     name: missionName,
     llm: {
       provider: provider as any,
       model,
       apiKey,
+      baseUrl: baseConfig.baseUrl,
       maxTokens: 4096,
       temperature: 0.7,
     },
@@ -6741,6 +6744,7 @@ function resolveGeneralLLMConfig(provider: string | undefined, model: string | u
   provider: any;
   model: string;
   apiKey?: string;
+  baseUrl?: string;
   maxTokens: number;
   temperature: number;
   timeout: number;
@@ -6769,6 +6773,7 @@ function resolveGeneralLLMConfig(provider: string | undefined, model: string | u
     provider: selectedProvider as any,
     model: model || baseConfig.model,
     apiKey: effectiveKey,
+    baseUrl: baseConfig.baseUrl,
     maxTokens: 8192,
     temperature: 0.4,
     timeout: readGeneralTimeoutEnv() ?? 300000, // General planning needs room (was a hardcoded 60s); override via env
