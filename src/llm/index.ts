@@ -19,6 +19,7 @@ import { join } from 'path';
 import type { LLMConfig, LLMMessage, LLMResponse, LLMProvider, LLMToolDefinition, LLMToolCall, FallbackEntry } from '../types/index.js';
 import { config } from '../config/index.js';
 import { localAgentChat } from '../agent/local-agents.js';
+import { fetchBypassingProxy } from '../net/proxy.js';
 
 // =============================================================================
 // LLM EVENTS
@@ -56,6 +57,8 @@ export interface ChatOptions {
   systemPrompt?: string;
   /** Tool definitions for function calling */
   tools?: LLMToolDefinition[];
+  /** External cancellation — honored by adapters whose backend supports mid-flight abort (currently LocalAdapter). */
+  signal?: AbortSignal;
 }
 
 /**
@@ -115,6 +118,8 @@ interface AnthropicResponse {
 interface OllamaResponse {
   message?: {
     content?: string;
+    reasoning_content?: string;
+    reasoning?: string;
     /** Native function calls returned by the model (Ollama /api/chat with tools). */
     tool_calls?: Array<{
       function: {
@@ -126,6 +131,45 @@ interface OllamaResponse {
   model?: string;
   prompt_eval_count?: number;
   eval_count?: number;
+  done_reason?: string;
+}
+
+/**
+ * Reasoning models (DeepSeek-R1 / V4-flash, QwQ, …) served by llama.cpp or Ollama
+ * split their <think> trace into a SEPARATE field — `reasoning_content` on the
+ * OpenAI wire, `reasoning` on Ollama — and leave `message.content` EMPTY whenever
+ * the final answer never lands. The dominant cause is token exhaustion: the model
+ * runs out of max_tokens mid-reasoning (finish_reason:"length"), so everything it
+ * produced sits in reasoning_content and content is "". Reading only `content`
+ * then returns '' and the caller wrongly reports an "empty/refused response",
+ * dead-ending an authorized task on output the model actually generated.
+ *
+ * Salvage order, most-preferred first:
+ *   1. a real `content` answer;
+ *   2. if the <think> block was left INLINE in content, the text after </think>;
+ *   3. the reasoning trace itself — for a benchmark/judge this is far better than a
+ *      hard error, since the trace usually already contains the payload/flag.
+ */
+export function extractLocalContent(
+  msg?: { content?: string; reasoning_content?: string; reasoning?: string } | null
+): string {
+  if (!msg) return '';
+  const raw = (msg.content || '').trim();
+  const reasoning = (msg.reasoning_content || msg.reasoning || '').trim();
+  if (raw) {
+    // Server didn't split the trace out — it's inline as <think>…</think>.
+    const closeIdx = raw.toLowerCase().lastIndexOf('</think>');
+    if (closeIdx >= 0) {
+      const after = raw.slice(closeIdx + '</think>'.length).trim();
+      if (after) return after; // the real answer after the trace
+      // Only a think block, no answer → salvage its inner text (or the split field).
+      const inner = raw.replace(/^[\s\S]*?<think>/i, '').replace(/<\/think>[\s\S]*$/i, '').trim();
+      return inner || reasoning || raw;
+    }
+    return raw;
+  }
+  // content empty → fall back to the separated reasoning trace so nothing is lost.
+  return reasoning;
 }
 
 // =============================================================================
@@ -901,6 +945,19 @@ class LocalAdapter implements LLMProviderAdapter {
         : this.formatOllamaTools(options.tools);
     }
 
+    // Combine our own timeout with an external signal (e.g. the Express request's 'close'
+    // event) so an operator cancelling mid-flight — or the client simply disconnecting —
+    // actually stops generation on the local server, instead of leaving it to grind through
+    // the full response on a single-slot backend like llama.cpp while nothing is listening.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.config.timeout || 120000);
+    const externalSignal = options?.signal;
+    const onExternalAbort = () => controller.abort();
+    if (externalSignal) {
+      if (externalSignal.aborted) controller.abort();
+      else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+
     try {
       const headers = {
         'Content-Type': 'application/json',
@@ -908,12 +965,11 @@ class LocalAdapter implements LLMProviderAdapter {
         // expect *some* bearer — send a dummy unless the operator set a real key.
         ...(openaiWire ? { Authorization: `Bearer ${this.config.apiKey || 'local'}` } : {}),
       };
-      const makeSignal = () => AbortSignal.timeout(this.config.timeout || 120000);
-      let response = await fetch(url, {
+      let response = await fetchBypassingProxy(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(requestBody),
-        signal: makeSignal(),
+        signal: controller.signal,
       });
 
       // Some local/OpenAI-compatible servers reject the `tools` field instead
@@ -922,23 +978,42 @@ class LocalAdapter implements LLMProviderAdapter {
       if (!response.ok && tryNative && this.config.nativeTools !== true) {
         delete requestBody.tools;
         this.cacheProbeResult(false);
-        response = await fetch(url, {
+        response = await fetchBypassingProxy(url, {
           method: 'POST',
           headers,
           body: JSON.stringify(requestBody),
-          signal: makeSignal(),
+          signal: controller.signal,
         });
       }
 
       if (!response.ok) {
-        throw new Error(`Local LLM error: ${response.status}`);
+        // Surface a STRUCTURED error so the retry loop can classify it: a 401/403/404 from a
+        // local server (wrong bearer, missing model tag) is permanent and must skip the 3x retry
+        // instead of being re-fired as an opaque plain Error the `permanent` check can't recognize.
+        throw new LLMApiError(`Local LLM error: ${response.status}`, response.status);
       }
 
       const data = await response.json() as OllamaResponse & {
-        choices?: Array<{ message?: { content?: string; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> } }>;
+        choices?: Array<{
+          message?: {
+            content?: string;
+            reasoning_content?: string;
+            reasoning?: string;
+            tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
+          };
+          finish_reason?: string;
+        }>;
         usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
       };
-      const content = openaiWire ? (data.choices?.[0]?.message?.content || '') : (data.message?.content || '');
+      // Salvage reasoning-model output: extractLocalContent falls back to
+      // reasoning_content/reasoning (and unwraps inline <think>) so a model that
+      // exhausted its budget mid-reasoning isn't reported as an empty refusal.
+      const message = openaiWire ? data.choices?.[0]?.message : data.message;
+      const content = extractLocalContent(message);
+      // Preserve the model's REAL finish signal (OpenAI wire: finish_reason; Ollama: done_reason)
+      // instead of hardcoding 'stop'. Losing it hid 'length' (truncation) and 'content_filter'
+      // (a moderation-proxy refusal that isLikelyRefusal keys on) from every downstream consumer.
+      const wireFinishReason = openaiWire ? data.choices?.[0]?.finish_reason : data.done_reason;
 
       // ── Native tool-call parsing (if we probed) ────────────────────────
       let nativeToolCalls: LLMToolCall[] | undefined;
@@ -973,7 +1048,7 @@ class LocalAdapter implements LLMProviderAdapter {
         content,
         model: data.model || this.config.model,
         usage,
-        finishReason: toolCalls?.length ? 'tool_calls' : 'stop',
+        finishReason: toolCalls?.length ? 'tool_calls' : (wireFinishReason || 'stop'),
         toolCalls,
       };
     } catch (error) {
@@ -982,7 +1057,13 @@ class LocalAdapter implements LLMProviderAdapter {
           'Could not connect to local LLM. Start Ollama (`ollama serve`), or point TEMPEST_LOCAL_BASE_URL at your OpenAI-compatible server (LM Studio / vLLM / llama.cpp).'
         );
       }
+      if (controller.signal.aborted) {
+        throw new Error(externalSignal?.aborted ? 'Cancelled by operator' : 'Local LLM request timed out');
+      }
       throw error;
+    } finally {
+      clearTimeout(timer);
+      if (externalSignal) externalSignal.removeEventListener('abort', onExternalAbort);
     }
   }
 }
@@ -1450,9 +1531,21 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
           break;
         } catch (error) {
           lastError = error as Error;
-          // auth / forbidden / missing-model won't fix on retry — bail to next hop
-          const permanent = error instanceof LLMApiError &&
-            (error.status === 401 || error.status === 403 || error.status === 404);
+          // auth / forbidden / missing-model won't fix on retry — bail to next hop.
+          // An operator/client cancellation (options.signal aborted) won't fix on retry either —
+          // without this check the retry loop burns 1s+2s of backoff re-attempting a call whose
+          // signal is already aborted (LocalAdapter/OpenRouter self-abort instantly on each retry,
+          // so no duplicate request reaches the backend, but the delay pointlessly stalls the caller).
+          // A local backend's timeout is a DETERMINISTIC per-call cap on a single-slot server
+          // (llama.cpp/Ollama serve one inference at a time): re-firing the identical call just
+          // re-hits the same cap after 1s+2s of pointless backoff, then finally advances to a
+          // cloud fallback the operator may not want. Treat a local/local-agent timeout as
+          // permanent so the ladder advances straight to the next hop instead of retrying in place.
+          const isLocalProvider = hop.provider === 'local' || hop.provider === 'local-agent';
+          const permanent = (error instanceof LLMApiError &&
+            (error.status === 401 || error.status === 403 || error.status === 404)) ||
+            !!options?.signal?.aborted ||
+            (isLocalProvider && classifyErrorKind(error as Error) === 'timeout');
           if (permanent || attempt >= this.retryAttempts) break;
           let delayMs = this.retryDelayMs * Math.pow(2, attempt - 1);
           if (error instanceof LLMApiError && error.retryAfterMs) {
@@ -1470,11 +1563,13 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
         const reason = classifyErrorKind(lastError);
         trail.push(`${hop.model}:${reason}`);
         reframeNext = false;
-        if (hasNext) {
+        // An explicit cancellation means "stop", not "try a different model" — falling through to
+        // the next hop would silently start a fresh request the caller already asked to abandon.
+        if (hasNext && !options?.signal?.aborted) {
           this.emit('request:fallback', { fromModel: hop.model, toModel: ladder[rung + 1].model, engaged: true, reason });
           continue;
         }
-        break; // bottom of the ladder, still failing → throw below
+        break; // bottom of the ladder, or cancelled — still failing → throw below
       }
 
       // ── soft failure on a 200: refusal or empty/contentless ──

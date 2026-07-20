@@ -109,6 +109,10 @@ export interface TempestSettings {
     colorOutput: boolean;
     verboseLogging: boolean;
   };
+
+  // Outbound SOCKS5 proxy for test/attack traffic (socks5://[user:pass@]host:port).
+  // Empty/unset = egress from the operator's own IP. See src/net/proxy.ts.
+  proxyUrl?: string;
 }
 
 // =============================================================================
@@ -186,6 +190,8 @@ const DEFAULT_SETTINGS: TempestSettings = {
     colorOutput: true,
     verboseLogging: false,
   },
+
+  proxyUrl: '',
 };
 
 export function migrateLegacyDeepSeekSettings(
@@ -694,6 +700,21 @@ class ConfigManager {
   }
 
   /**
+   * Outbound SOCKS5 proxy URL for test/attack traffic. Env TEMPEST_PROXY_URL wins over
+   * the saved value; returns '' when egress should leave from the operator's own IP.
+   */
+  getProxyUrl(): string {
+    const env = process.env.TEMPEST_PROXY_URL?.trim();
+    if (env) return env;
+    return (this.config.get('proxyUrl') || '').trim();
+  }
+
+  /** Persist the proxy URL (pass '' to clear). Does NOT install it — see net/proxy. */
+  setProxyUrl(url: string): void {
+    this.config.set('proxyUrl', (url || '').trim());
+  }
+
+  /**
    * Get an API key for a provider
    */
   getApiKey(provider: ApiKeyProvider): string | undefined {
@@ -873,7 +894,17 @@ class ConfigManager {
       baseUrl,
       maxTokens: this.config.get('maxTokens'),
       temperature: this.config.get('temperature'),
-      timeout: this.config.get('timeout'),
+      // Local inference is far slower than cloud APIs, so it must not inherit the cloud-tuned
+      // default timeout: floor it at 120s (matching the frontend llmTimeoutFor) and let the
+      // operator override via TEMPEST_LOCAL_TIMEOUT for very slow reasoning models.
+      timeout: actualProvider === 'local'
+        ? ((): number => {
+            const parsed = Number(process.env.TEMPEST_LOCAL_TIMEOUT);
+            return Number.isFinite(parsed) && parsed > 0
+              ? parsed
+              : Math.max(Number(this.config.get('timeout')) || 0, 120000);
+          })()
+        : this.config.get('timeout'),
       fallbackChain: this.buildFallbackChain(actualProvider),
     };
   }
