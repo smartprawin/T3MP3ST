@@ -34,7 +34,7 @@ Three things set it apart:
 2. **Keyless.** The AI coding agent already on your machine is the backbone. No API keys, no second bill, no gatekeeper.
 3. **Honest about scope.** The [status table](#what-ships-today) marks exactly what's stable, experimental, or roadmap — because red-teaming shouldn't be a priesthood, and it damn sure shouldn't run on vibes.
 
-**Jump to** → [Quick start](#quick-start) · [Updating](#updating-from-upstream) · [What it hunts](#what-it-hunts) · [What ships today](#what-ships-today) · [Benchmarks](#benchmarks) · [Architecture](#architecture) · [Docs](#documentation)
+**Jump to** → [Quick start](#quick-start) · [Usage guide](docs/GETTING_STARTED.md) · [Developer guide](docs/DEVELOPER_GUIDE.md) · [Updating](#updating-from-upstream) · [What it hunts](#what-it-hunts) · [What ships today](#what-ships-today) · [Benchmarks](#benchmarks) · [Architecture](#architecture) · [Docs](#documentation)
 
 ## ⚠️ Authorized use only
 
@@ -99,7 +99,7 @@ Check the numbers for yourself:
 npm run verify-claims             # re-derives every headline from committed JSON in bench/
 ```
 
-Library/SDK usage, the full HTTP API, and MCP setup live in [docs/](docs/).
+Step-by-step operator usage lives in [Getting Started](docs/GETTING_STARTED.md). Library/SDK usage, the HTTP API, and MCP setup live in [docs/](docs/).
 
 ### Docker
 
@@ -248,6 +248,11 @@ Deeper reading: [WALL_FORENSICS](docs/WALL_FORENSICS.md) (per-challenge misses),
 
 | Doc | Contents |
 |---|---|
+| [Docs index](docs/README.md) | operator, developer, benchmark, and release documentation map |
+| [Getting Started](docs/GETTING_STARTED.md) | install, first launch, first safe mission, CLI basics, updates, and troubleshooting |
+| [Developer Guide](docs/DEVELOPER_GUIDE.md) | source map, scripts, SDK usage, extension points, and release checks |
+| [API Reference](docs/API_REFERENCE.md) | local HTTP API route groups and integration notes |
+| [MCP Guide](docs/MCP_GUIDE.md) | MCP server setup and `security_recon` usage |
 | [FEATURES.md](FEATURES.md) | feature-by-feature status (`[x]` shipped / `[~]` partial / `[ ]` planned) |
 | [SCOPE_AND_AUTHORIZATION](docs/SCOPE_AND_AUTHORIZATION.md) | authority model, scope receipts, evidence and retest rules |
 | [VERIFIED_PROVENANCE](docs/VERIFIED_PROVENANCE.md) | how findings become tool-proven instead of model-asserted |
