@@ -224,6 +224,7 @@ export type { OpsecConfig, Finding, Credential, Target, DetectionEvent } from '.
 import { OperatorCell, OperatorAgent, ARCHETYPE_PROFILES, PHASE_ARCHETYPES, KILL_CHAIN_ORDER } from './operators/index.js';
 import { PackBoard } from './pack/board.js';
 import { randomUUID } from 'node:crypto';
+import { createPrivateReportWorkspace, readPrivateToolReport } from './arsenal/report-workspace.js';
 import { MissionControl, TaskQueue } from './mission/index.js';
 import { TargetEnvironment } from './target/index.js';
 import { EvidenceVault } from './evidence/index.js';
@@ -424,6 +425,10 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
         runSubprocess,
         isToolAvailable,
         scopeOk: (target: string) => scopeViolation(this.arsenal.getScope(), { parameters: { target } }) === null,
+        // Report-FILE tools (garak) may emit prompt/response transcripts. Node's mkdtemp creates a
+        // mode-0700 per-run directory; the handler removes it in a finally path on every outcome.
+        createReportWorkspace: createPrivateReportWorkspace,
+        readToolReport: readPrivateToolReport,
       };
       const existing = new Set(this.arsenal.getAllTools().map((t) => t.name));
       this.arsenal.registerMany(buildAdapterTools(TOOL_ADAPTERS, deps, existing));

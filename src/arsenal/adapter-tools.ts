@@ -38,6 +38,13 @@ export interface SubprocessResult {
   exitCode: number;
 }
 
+export interface ReportWorkspace {
+  /** Base path supplied to the tool; the template derives the concrete report filename from it. */
+  reportBase: string;
+  /** Remove the complete private workspace, including partial reports from failed runs. */
+  cleanup: () => Promise<void>;
+}
+
 /**
  * The (fakeable) dependencies the factory needs. `runSubprocess` / `isToolAvailable` are the real
  * functions exported from src/arsenal/index.ts; `scopeOk` is an optional in-handler target gate.
@@ -57,6 +64,14 @@ export interface AdapterToolDeps {
    * Arsenal-level egress gate in execute() still applies at the engine boundary).
    */
   scopeOk?: (target: string) => boolean;
+  /**
+   * Create a private per-run workspace for a tool that emits its report to a FILE (see
+   * ArgTemplate.reportFile). Its cleanup must remove the whole workspace, including partial reports.
+   * Omitted → such tools fall back to parsing stdout.
+   */
+  createReportWorkspace?: (adapterId: string) => Promise<ReportWorkspace>;
+  /** Read a tool's report file back. The workspace cleanup owns deletion. */
+  readToolReport?: (path: string) => Promise<string>;
 }
 
 // =============================================================================
@@ -74,6 +89,13 @@ interface ArgTemplate {
   targetParam: string;
   defaultTimeoutMs: number;
   build: (target: string, params: Record<string, unknown>) => string[];
+  /**
+   * Tools that write their structured results to a FILE, not stdout (e.g. garak's report.jsonl).
+   * The handler creates a private workspace (via deps.createReportWorkspace), injects its base as
+   * `__reportBase` for build() to point the tool at, and — given that base — this returns the actual
+   * file to read back and parse INSTEAD of stdout. Absent → the tool's stdout is parsed (the default).
+   */
+  reportFile?: (reportBase: string) => string;
 }
 
 const str = (v: unknown): string | undefined =>
@@ -121,6 +143,19 @@ const artifactPath = (target: string, params: Record<string, unknown>): string =
  * catalog put it and the Arsenal egress gate + optional scopeOk fence the target.
  */
 const ARG_TEMPLATES: Record<string, ArgTemplate> = {
+  // garak writes its structured results to <report_prefix>.report.jsonl (a FILE), not stdout — so we
+  // point --report_prefix at the handler-minted base and read that file back for parseGarak. Model +
+  // probe flags stay hardcoded; only the scoped model name (the target) is tunable. Model probing is
+  // slow, hence the long timeout.
+  garak: {
+    targetParam: 'target',
+    defaultTimeoutMs: 1_800_000,
+    reportFile: (base) => `${base}.report.jsonl`,
+    build: (target, params) => {
+      const base = str(params.__reportBase) ?? 'garak_run';
+      return ['--model_type', 'rest', '--model_name', target, '--report_prefix', base];
+    },
+  },
   nmap: {
     targetParam: 'target',
     defaultTimeoutMs: 120_000,
@@ -487,35 +522,82 @@ export function adapterToCustomTool(adapter: ToolAdapter, deps: AdapterToolDeps)
       };
     }
 
-    // 4) Build argv from the per-adapter template and run the subprocess with a per-adapter timeout.
-    //    A template may REFUSE a dangerous param (e.g. curl `-d @file` local-file read) by throwing —
-    //    convert that into a clean failure result, never an unhandled rejection.
-    let argv: string[];
-    try {
-      argv = template.build(target ?? '', context.parameters || {});
-    } catch (err) {
-      return { success: false, error: `${adapter.name}: ${err instanceof Error ? err.message : String(err)}` };
-    }
-    const result = await deps.runSubprocess(adapter.binary, argv, { timeout: template.defaultTimeoutMs });
-
-    if (result.exitCode !== 0) {
+    // A report-file tool must never fall back to a relative/default report path: that would place
+    // sensitive output outside the private workspace and outside the unconditional cleanup path.
+    if (template.reportFile && (!deps.createReportWorkspace || !deps.readToolReport)) {
       return {
         success: false,
-        error: `${adapter.binary} exited ${result.exitCode}: ${result.stderr || result.stdout || 'no output'}`,
-        output: result.stdout || undefined,
+        error: `${adapter.name}: private report workspace dependencies are unavailable; refusing to run.`,
       };
     }
 
-    // Populate the structured `findings` channel from the raw stdout when a parser is wired for
-    // this tool (parseToolOutput → [] otherwise). The raw stdout is ALWAYS kept as `output` — it
-    // is the evidence of record the agent loop stamps onto each finding and the live gate checks;
-    // the parser summarises it, never replaces it. A parse yielding nothing leaves findings unset.
-    const findings = parseToolOutput(adapter.id, result.stdout);
-    return {
-      success: true,
-      output: result.stdout,
-      ...(findings.length ? { findings } : {}),
-    };
+    // 4) Build argv from the per-adapter template and run the subprocess with a per-adapter timeout.
+    //    A template may REFUSE a dangerous param (e.g. curl `-d @file` local-file read) by throwing —
+    //    convert that into a clean failure result, never an unhandled rejection.
+    // A report-FILE tool (e.g. garak) writes potentially sensitive transcripts to disk. Keep them
+    // inside a private per-run workspace and unconditionally remove that workspace after every exit
+    // path: success, non-zero exit, timeout/spawn error, parser/read error, or argv-build refusal.
+    let workspace: ReportWorkspace | undefined;
+    let response: ToolResult;
+    let cleanupError: unknown;
+    try {
+      workspace = template.reportFile
+        ? await deps.createReportWorkspace!(adapter.id)
+        : undefined;
+      const reportBase = workspace?.reportBase;
+      const buildParams: Record<string, unknown> = reportBase
+        ? { ...(context.parameters || {}), __reportBase: reportBase }
+        : context.parameters || {};
+      const argv = template.build(target ?? '', buildParams);
+      const result = await deps.runSubprocess(adapter.binary, argv, { timeout: template.defaultTimeoutMs });
+
+      if (result.exitCode !== 0) {
+        response = {
+          success: false,
+          error: `${adapter.binary} exited ${result.exitCode}: ${result.stderr || result.stdout || 'no output'}`,
+          output: result.stdout || undefined,
+        };
+      } else {
+        // Choose the stream to parse: a report-file tool's report.jsonl (read back from disk) when
+        // declared and available, else stdout. The chosen stream is both parsed and retained as the
+        // evidence of record, so every finding is backed by the exact bytes it was parsed from.
+        let evidence = result.stdout;
+        if (reportBase && template.reportFile && deps.readToolReport) {
+          const report = await deps.readToolReport(template.reportFile(reportBase));
+          if (report.trim()) evidence = report;
+        }
+
+        const findings = parseToolOutput(adapter.id, evidence);
+        response = {
+          success: true,
+          output: evidence,
+          ...(findings.length ? { findings } : {}),
+        };
+      }
+    } catch (err) {
+      response = {
+        success: false,
+        error: `${adapter.name}: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    } finally {
+      if (workspace) {
+        try {
+          await workspace.cleanup();
+        } catch (err) {
+          cleanupError = err;
+        }
+      }
+    }
+
+    if (cleanupError) {
+      return {
+        success: false,
+        error: `${adapter.name}: failed to remove its private report workspace: ${
+          cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+        }`,
+      };
+    }
+    return response;
   };
 
   return {
