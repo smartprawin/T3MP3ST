@@ -54,6 +54,7 @@
     "test:cybench-ci": "node scripts/test-cybench-ci.mjs",
     "tools:check": "bash scripts/check-tools-image.sh",
     "tools:build": "bash tools/build.sh",
+    "test:tools-dockerfile": "node scripts/test-tools-dockerfile.mjs",
     "install:tools": "bash scripts/install-tools.sh",
     "docs:sync": "node scripts/pagenary-docsite.mjs",
     "docs:build": "npm run docs:sync && pagenary build t3mp3st-docs",
