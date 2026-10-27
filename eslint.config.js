@@ -25,7 +25,7 @@ export default tseslint.config(
       'no-console': 'off', // Allow console for CLI tool
       'prefer-const': 'error',
       'no-var': 'error',
-      'eqeqeq': ['error', 'always'],
+      'eqeqeq': ['error', 'always', { null: 'ignore' }],
       'curly': ['warn', 'multi-line'],  // Allow single-line if without braces
     },
   },

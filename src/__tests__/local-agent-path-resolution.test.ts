@@ -322,7 +322,7 @@ case "$*" in
 esac
 `;
 
-describe('localAgentChat — stale Claude session fallback (Tier 2)', () => {
+describe.runIf(process.platform !== 'win32')('localAgentChat — stale Claude session fallback (Tier 2)', () => {
   it('retries WITHOUT --resume when the resumed session is stale, and succeeds', async () => {
     const home = scratch();
     putExe(join(home, '.local', 'bin'), 'claude', FAKE_CLI_RESUME_STALE);

@@ -22,12 +22,23 @@ describe('PR #153 review blockers', () => {
     mkdirSync(root);
     writeFileSync(join(root, 'inside.bin'), 'safe');
     writeFileSync(outside, 'outside');
-    symlinkSync(outside, join(root, 'escape.bin'));
 
     expect(approvedLocalPath('scan', join(root, 'inside.bin')).ok).toBe(false);
     process.env.T3MP3ST_SOURCE_ROOT = root;
     expect(approvedLocalPath('scan', 'inside.bin')).toMatchObject({ ok: true });
     expect(approvedLocalPath('scan', '../outside.bin')).toMatchObject({ ok: false });
-    expect(approvedLocalPath('scan', 'escape.bin')).toMatchObject({ ok: false });
+
+    // Symlink creation requires elevated privileges on Windows (EPERM without
+    // Developer Mode / admin); skip the symlink-escape assertion when unavailable.
+    let symlinkCreated = false;
+    try {
+      symlinkSync(outside, join(root, 'escape.bin'));
+      symlinkCreated = true;
+    } catch (err: any) {
+      if (err?.code !== 'EPERM' && err?.code !== 'EACCES') throw err;
+    }
+    if (symlinkCreated) {
+      expect(approvedLocalPath('scan', 'escape.bin')).toMatchObject({ ok: false });
+    }
   });
 });
